@@ -10,6 +10,7 @@
 struct Attributes {
     float3 positionOS : POSITION; // 对象空间中的位置
     float3 normalOS : NORMAL;
+    float4 tangentOS : TANGENT;
     float2 uv : TEXCOORD0; // 材质贴图uv
 };
 
@@ -22,6 +23,7 @@ struct Interpolators {
     float2 uv : TEXCOORD0;
     float3 positionWS : TEXCOORD1;
     float3 normalWS : TEXCOORD2;
+    float4 tangentWS : TEXCOORD3;
 
 };
 
@@ -56,6 +58,7 @@ Interpolators Vertex(Attributes input) {
     // 顶点函数里使用采样器采样uv
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
     output.normalWS = normInput.normalWS;
+    output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
     output.positionWS = posnInputs.positionWS;
 
     return output;
@@ -75,10 +78,12 @@ float4 Fragment(Interpolators input
     #endif
     ) : SV_TARGET {
     float2 uv = input.uv;
+    // return float4(uv, 0, 1); // uv可视化
     // 颜色映射样例
     float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv);
     // 注释掉原来的colorSample需要再声明一个
     //float4 colorSample = float4(1,1,1,1); // 底色，可以改其它颜色
+    //float3 normalWS = UnpackNormal(colorSample); // 先借用下颜色贴图通道,尝试 法线贴图与切线空间时用
     // -------程序化点阵镂空-------
     colorSample.a = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius, float2(_DotScaleX, _DotScaleY));
 
@@ -87,10 +92,17 @@ float4 Fragment(Interpolators input
     TestAlphaClip(colorSample);
 
     float3 normalWS = normalize(input.normalWS);
-#ifdef _DOUBLE_SIDED_NORMALS
+    #ifdef _DOUBLE_SIDED_NORMALS
     normalWS *= IS_FRONT_VFACE(frontFace, 1, -1);
-#endif
+    #endif
 
+    // 法线贴图采样与TBN转换
+    float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
+    float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, uv), _NormalStrength);
+    normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
+
+    // return float4(normalWS * 0.5 + 0.5, 1);  // 测试法线贴图，旋转模型法线应跟着走
+    // return float4((normalWS + 1) * 0.5, 1); // 向量重映射
     InputData lightingInput = (InputData)0;
     lightingInput.positionWS = input.positionWS;
     // 设置世界空间法线，数据是走Interpolators来的，input接应了这个结构体
@@ -99,19 +111,27 @@ float4 Fragment(Interpolators input
     lightingInput.normalWS = normalWS;
     lightingInput.viewDirectionWS = GetWorldSpaceNormalizeViewDir(input.positionWS);
     lightingInput.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
+#if UNITY_VERSION >= 202120
+    lightingInput.positionCS = input.positionCS;
+    // 调试法线贴图，会在渲染调试器中输出额外视图
+    lightingInput.tangentToWorld = tangentToWorld; // 提供转换矩阵
+#endif
 
     SurfaceData surfaceInput = (SurfaceData)0;
     surfaceInput.albedo = colorSample.rgb * _ColorTint.rgb;
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
     surfaceInput.specular = 1;
     surfaceInput.smoothness = _Smoothness;
-
-    // 最后再乘个色调
-#if UNITY_VERSION >= 202120
-    return UniversalFragmentBlinnPhong(lightingInput, surfaceInput);
-#else
-    return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
-#endif
+    // 调试钩子，给 Unity 内部调试工具“喂数据”，不影响眼前的光照颜色
+    surfaceInput.normalTS = normalTS; // 提供原始切线法线
+    // 现在切PBR了，这里不需要了  最后再乘个色调
+// #if UNITY_VERSION >= 202120
+//     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput);
+// #else
+//     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
+// #endif
+    return UniversalFragmentPBR(lightingInput, surfaceInput);
 }
+
 
 #endif

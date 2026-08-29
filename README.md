@@ -1,12 +1,13 @@
 # Unity URP Shader — MyLit
 
-一个基于 Unity URP 的自定义光照着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
+一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果和 **法线贴图** 支持。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
 
 ---
 
 ## ✨ 特性
 
-- **Blinn-Phong 光照模型**：基于 URP 内置光照库，支持主光源阴影、软阴影、级联阴影
+- **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
+- **法线贴图支持**：完整的 TBN 切线空间转换，可调节法线强度
 - **程序化点阵镂空**：通过数学计算在片元着色器中生成圆形点阵，实现半色调（halftone）镂空效果
 - **多种表面类型**：
   - `Opaque` — 不透明
@@ -19,6 +20,7 @@
 - **Alpha 裁切**：可切换裁切阈值，镂空区域基于点阵密度动态计算
 - **自定义材质检视面板**：下拉菜单控制 Surface Type 和 Face Rendering Mode，自动同步 Blend / ZWrite / Cull / Shader Keywords
 - **SRP Batcher 兼容**：使用 `CBUFFER_START(UnityPerMaterial)` 包裹材质属性
+- **DEBUG_DISPLAY 支持**：可配合 Unity 渲染调试器查看法线数据
 - **多版本兼容**：支持 Unity 2021.3+ 和 2022+ 的 API 差异
 
 ---
@@ -56,7 +58,11 @@ Assets/
 │       ├── MyLitForwardLitPass.hlsl   # 前向光照通道（顶点 + 片元）
 │       └── MyLitShadowCasterPass.hlsl # 阴影投射通道
 └── Textures/
-    └── cat.png                    # 示例贴图
+    ├── cat.png                    # 示例贴图
+    ├── red_brick_diff_4k.jpg      # 红砖漫反射贴图
+    ├── red_brick_nor_gl_4k.exr    # 红砖法线贴图
+    ├── red_brick_rough_4k.exr     # 红砖粗糙度贴图
+    └── red_brick_disp_4k.png      # 红砖位移贴图
 ```
 
 ---
@@ -70,8 +76,9 @@ Assets/
    - 选择 `TransparentCutout` 时会显示 **Alpha Cutout Threshold** 滑条
    - 调整 **Dot Density**（点阵密度）和 **Dot Radius**（点半径）控制镂空效果
    - 调整 **Dot Scale X/Y** 可拉伸 UV 方向的点阵形状
-4. **分配贴图**：将主纹理拖入 **Color** 槽位
-5. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
+4. **分配贴图**：将主纹理拖入 **Color** 槽位，法线贴图拖入 **Normal** 槽位
+5. **调整法线强度**：通过 **Normal strength** 滑条控制凹凸程度
+6. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
 
 ---
 
@@ -81,7 +88,9 @@ Assets/
 |------|------|------|
 | `Color` | 2D 贴图 | 主纹理（RGB = 反照率, A = 透明度） |
 | `Tint` | Color | 颜色 tint，与纹理颜色相乘 |
-| `Smoothness` | Float | 光滑度（影响高光锐利度） |
+| `Normal` | 2D 贴图 | 法线贴图（OpenGL 格式），凹凸细节来源 |
+| `Normal strength` | Range(0, 1) | 法线强度，控制凹凸程度 |
+| `Smoothness` | Range(0, 1) | 光滑度（影响高光锐利度） |
 | `Dot Density` | Float | 点阵密度，值越大点越密集 |
 | `Dot Radius` | Range(0, 0.5) | 每个点的半径大小 |
 | `Dot Scale X` | Range(0.1, 5) | X 方向点阵拉伸 |
@@ -96,7 +105,7 @@ Assets/
 
 | Pass | LightMode | 作用 |
 |------|-----------|------|
-| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 Blinn-Phong 光照 + 点阵镂空 + Alpha 裁切 |
+| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 点阵镂空 + Alpha 裁切 |
 | `ShadowCaster` | `ShadowCaster` | 阴影投射通道，支持带 Alpha 裁切的阴影生成 |
 
 ### 程序化点阵镂空算法
@@ -115,6 +124,25 @@ float CalculateDotMatrix(float2 uv, float density, float radius, float2 scale) {
 
 该函数的返回值直接覆盖纹理的 alpha 通道，随后由 `clip()` 进行硬裁切。
 
+### 法线贴图管线
+
+法线贴图采用完整的 TBN 切线空间转换流程：
+
+1. **顶点阶段**：从 `Attributes` 读取 `tangentOS`，通过 `GetVertexNormalInputs` 获取世界空间切线，传递给 `Interpolators`
+2. **片元阶段**：用 `CreateTangentToWorld()` 构建切线→世界矩阵
+3. **采样与解码**：`UnpackNormalScale()` 解压法线贴图并应用强度系数
+4. **空间转换**：`TransformTangentToWorld()` 将切线空间法线转换到世界空间参与光照
+
+```hlsl
+// 顶点输出
+output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
+
+// 片元转换
+float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
+float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, uv), _NormalStrength);
+normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
+```
+
 ### 自定义 Inspector 关键字联动
 
 | Surface Type | Render Queue | Blend | ZWrite | Alpha Cutout Keyword |
@@ -128,6 +156,21 @@ float CalculateDotMatrix(float2 uv, float density, float radius, float2 scale) {
 | FrontOnly | Back | ❌ |
 | NoCulling | Off | ❌ |
 | DoubleSided | Off | ✅ |
+
+---
+
+## 🔄 Changelog
+
+### — PBR + 法线贴图升级
+
+**Shader 改动：**
+- 光照模型从 `UniversalFragmentBlinnPhong` 切换为 `UniversalFragmentPBR`
+- 新增法线贴图属性 `_NormalMap` 和强度控制 `_NormalStrength`
+- 添加切线数据流（`tangentOS` → `tangentWS`）和 TBN 矩阵转换
+- 使用 `UnpackNormalScale` 支持可调节的法线强度
+- 添加 `DEBUG_DISPLAY` 调试钩子（`surfaceInput.normalTS`）
+- `_Smoothness` 改为 Range(0,1)，默认值 0.5
+- 新增 4K PBR 红砖测试贴图（漫反射、法线、粗糙度、位移）
 
 ---
 

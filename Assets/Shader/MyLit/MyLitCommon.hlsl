@@ -8,6 +8,7 @@
 CBUFFER_START(UnityPerMaterial)
 float4 _ColorTint;
 float4 _ColorMap_ST; // 这是Unity自动设置的，供TRANSFORM_TEX使用来应用UV平铺
+float _NormalStrength;
 float _Smoothness;
 float _Cutoff; // 让给GPU接收到透明度裁切阈值的滑条值
 // 程序化生成镂空材质
@@ -18,7 +19,7 @@ float _DotScaleY;
 CBUFFER_END
 // Textures
 TEXTURE2D(_ColorMap); SAMPLER(sampler_ColorMap); // RGB = albedo, A = alpha
-
+TEXTURE2D(_NormalMap); SAMPLER(sampler_NormalMap);
 
 void TestAlphaClip(float4 colorSample) {
 #ifdef _ALPHA_CUTOUT

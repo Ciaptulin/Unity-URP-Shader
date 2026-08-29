@@ -7,7 +7,9 @@ Shader "Custom/MyLit"
         [MainColor] _ColorTint("Tint", Color) = (1,1,1,1)
         // 定义一个滑条，用来控制透明度裁切的阈值
         [HideInInspector] _Cutoff("Alpha cutout threshold", Range(0,1)) = 0.5
-        _Smoothness("Smoothness", Float) = 0
+        [NoScaleOffset][Normal] _NormalMap("Normal", 2D) = "bump" {}
+        _NormalStrength("Normal strength", Range(0, 1)) = 1
+        _Smoothness("Smoothness", Range(0,1)) = 0.5
 
         _DotDensity("Dot Density", Float) = 10
         _DotRadius("Dot Radius", Range(0,0.5)) = 0.2
@@ -44,7 +46,9 @@ Shader "Custom/MyLit"
         ZWrite [_ZWrite]
         Cull[_Cull]
         HLSLPROGRAM // Begin HLSL code
-            #define _SPECULAR_COLOR
+            // #define _SPECULAR_COLOR // 切换为 PBR，默认包含镜面高光，此部分不再需要
+            #pragma _NORMALMAP
+            //#pragma shader_feature _NORMALMAP
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
 #if UNITY_VERSION >= 202120
@@ -54,6 +58,9 @@ Shader "Custom/MyLit"
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
 #endif
             #pragma multi_compile_fragment _ _SHADOWS_SOFT // 只影响片元
+#if UNITY_VERSION >= 202120
+            #pragma multi_compile_fragment _ DEBUG_DISPLAY
+#endif
             // Register our programmable stage functions
             #pragma vertex Vertex
             #pragma fragment Fragment
