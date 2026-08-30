@@ -9,6 +9,10 @@ Shader "Custom/MyLit"
         [HideInInspector] _Cutoff("Alpha cutout threshold", Range(0,1)) = 0.5
         [NoScaleOffset][Normal] _NormalMap("Normal", 2D) = "bump" {}
         _NormalStrength("Normal strength", Range(0, 1)) = 1
+        [NoScaleOffset] _MetalnessMask("Metalness mask", 2D) = "white" {}
+        _Metalness("Metalness", Range(0,1)) = 0
+        [NoScaleOffset] _SpecularMap("Specular map", 2D) = "white" {}
+        _SpecularTint("Specular tint", Color) = (1,1,1,1)
         _Smoothness("Smoothness", Range(0,1)) = 0.5
 
         _DotDensity("Dot Density", Float) = 10
@@ -47,7 +51,7 @@ Shader "Custom/MyLit"
         Cull[_Cull]
         HLSLPROGRAM // Begin HLSL code
             // #define _SPECULAR_COLOR // 切换为 PBR，默认包含镜面高光，此部分不再需要
-            #pragma _NORMALMAP
+            #define _NORMALMAP
             //#pragma shader_feature _NORMALMAP
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS

@@ -121,6 +121,8 @@ float4 Fragment(Interpolators input
     surfaceInput.albedo = colorSample.rgb * _ColorTint.rgb;
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
     surfaceInput.specular = 1;
+    surfaceInput.metallic = SAMPLE_TEXTURE2D(_MetalnessMask, sampler_MetalnessMask, uv).r * _Metalness;
+    surfaceInput.metallic = _Metalness;
     surfaceInput.smoothness = _Smoothness;
     // 调试钩子，给 Unity 内部调试工具“喂数据”，不影响眼前的光照颜色
     surfaceInput.normalTS = normalTS; // 提供原始切线法线
