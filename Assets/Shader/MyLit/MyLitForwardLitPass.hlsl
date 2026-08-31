@@ -24,9 +24,8 @@ struct Interpolators {
     float2 uv : TEXCOORD0;
     float3 positionWS : TEXCOORD1;
     float3 normalWS : TEXCOORD2;
-    #ifdef _NORMALMAP
     float4 tangentWS : TEXCOORD3;
-    #endif
+
 };
 
 // #ifndef MY_LIT_COMMON_INCLUDED
@@ -60,9 +59,7 @@ Interpolators Vertex(Attributes input) {
     // 顶点函数里使用采样器采样uv
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
     output.normalWS = normInput.normalWS;
-    #ifdef _NORMALMAP
     output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
-    #endif
     output.positionWS = posnInputs.positionWS;
 
     return output;
@@ -91,15 +88,12 @@ float4 Fragment(Interpolators input
     // 这里就是把变量转移出来用
     float3 positionWS = input.positionWS;
     float3 viewDirWS = GetWorldSpaceNormalizeViewDir(input.positionWS); // In ShaderVariablesFunctions.hlsl
-    #ifdef _NORMALMAP
     float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS); // In ParallaxMapping.hlsl
-    #endif
+  
     float2 uv = input.uv; // 拿出uv
     // return float4(uv, 0, 1); // uv可视化
-    #ifdef _NORMALMAP
     // 对uv进行偏移采样
     uv += ParallaxMapping(TEXTURE2D_ARGS(_ParallaxMap, sampler_ParallaxMap), viewDirTS, _ParallaxStrength, uv);
-    #endif
     // 颜色映射样例
     float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv) * _ColorTint;
     // 括号内的值小于0，直接把这个像素丢弃

@@ -240,30 +240,39 @@ float CalculateDotMatrix(float2 uv, float density, float radius, float2 scale) {
 
 ### 视差贴图（Parallax Mapping）
 
-视差效果通过 URP 内置 `ParallaxMapping.hlsl` 实现，在片元着色器中对 UV 进行视角相关的偏移采样：
+视差效果通过 URP 内置 `ParallaxMapping.hlsl` 实现，在片元着色器中对 UV 进行视角相关的偏移采样。该效果**始终**执行，不依赖 `_NORMALMAP` 关键字，可独立于法线贴图启用：
 
 ```hlsl
+// 切线空间视角方向（tangentWS 始终可用）
 float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS);
+// UV 偏移采样（始终执行）
 uv += ParallaxMapping(TEXTURE2D_ARGS(_ParallaxMap, sampler_ParallaxMap), viewDirTS, _ParallaxStrength, uv);
 ```
 
 ### 法线贴图管线
 
-法线贴图采用完整的 TBN 切线空间转换流程：
+法线贴图采用完整的 TBN 切线空间转换流程。切线数据**始终**通过 `Interpolators` 传递，不依赖 `_NORMALMAP` 关键字：
 
-1. **顶点阶段**：从 `Attributes` 读取 `tangentOS`，通过 `GetVertexNormalInputs` 获取世界空间切线，传递给 `Interpolators`
-2. **片元阶段**：用 `CreateTangentToWorld()` 构建切线→世界矩阵
-3. **采样与解码**：`UnpackNormalScale()` 解压法线贴图并应用强度系数
-4. **空间转换**：`TransformTangentToWorld()` 将切线空间法线转换到世界空间参与光照
+1. **顶点阶段**：从 `Attributes` 读取 `tangentOS`，通过 `GetVertexNormalInputs` 获取世界空间切线，**无条件**传递给 `Interpolators`
+2. **片元阶段**：用 `CreateTangentToWorld()` 构建切线→世界矩阵（在 `_NORMALMAP` 守卫外计算，保证调试器兼容）
+3. **采样与解码**（`_NORMALMAP` 启用时）：`UnpackNormalScale()` 解压法线贴图并应用强度系数
+4. **空间转换**（`_NORMALMAP` 启用时）：`TransformTangentToWorld()` 将切线空间法线转换到世界空间参与光照
+5. **兜底**（`_NORMALMAP` 未启用时）：`normalTS` 默认为 `(0, 0, 1)`，`normalWS` 保持原始世界法线
 
 ```hlsl
-// 顶点输出
+// 顶点输出（无条件）
 output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
 
-// 片元转换
+// 片元转换（守卫外计算，始终可用）
 float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
+
+#ifdef _NORMALMAP
 float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, uv), _NormalStrength);
 normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
+#else
+float3 normalTS = float3(0, 0, 1);
+normalWS = normalize(normalWS);
+#endif
 ```
 
 ### 自定义 Inspector 关键字联动
@@ -290,6 +299,22 @@ normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
 ---
 
 ## 🔄 Changelog
+
+### — 法线 & 视差管线解耦 + 架构简化
+
+**架构变更：**
+- 移除 `tangentWS` 的 `_NORMALMAP` 条件编译守卫 — 切线数据现在**始终**通过 `Interpolators` 传递，不再依赖法线贴图关键字
+- 移除视差贴图（Parallax Mapping）的 `_NORMALMAP` 条件编译守卫 — UV 偏移采样现在**始终**执行，确保高度图效果独立于法线贴图开关
+- 移除顶点函数中 `output.tangentWS` 的 `_NORMALMAP` 守卫，切线数据在顶点阶段无条件计算
+- 法线贴图采样仍由 `_NORMALMAP` 关键字控制，未分配法线贴图时 `normalTS` 回退为默认平面法线 `(0,0,1)`
+- `tangentToWorld` 矩阵在 `_NORMALMAP` 守卫外始终计算，保证渲染调试器 "Lighting Without Normal Maps" 模式正常工作
+
+**影响：**
+- 视差效果不再依赖法线贴图分配，可单独启用
+- 减少 shader variant 分支，简化关键字管理
+- 切线数据始终可用，为后续扩展（如各向异性、细节法线）提供基础
+
+---
 
 ### — 清漆 / 自发光 / 视差 / 粗糙度贴图 / 混合模式升级
 
