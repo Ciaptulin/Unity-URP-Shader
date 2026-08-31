@@ -1,6 +1,6 @@
 # Unity URP Shader — MyLit
 
-一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果和 **法线贴图** 支持。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
+一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果，支持 **法线贴图**、**金属度贴图** 和 **镜面反射贴图**。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
 
 ---
 
@@ -8,6 +8,8 @@
 
 - **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
 - **法线贴图支持**：完整的 TBN 切线空间转换，可调节法线强度
+- **金属度贴图**：支持金属度遮罩纹理 + 全局金属度系数，控制 F0 反射率
+- **镜面反射贴图**：支持镜面反射纹理 + 色调调节
 - **程序化点阵镂空**：通过数学计算在片元着色器中生成圆形点阵，实现半色调（halftone）镂空效果
 - **多种表面类型**：
   - `Opaque` — 不透明
@@ -59,10 +61,22 @@ Assets/
 │       └── MyLitShadowCasterPass.hlsl # 阴影投射通道
 └── Textures/
     ├── cat.png                    # 示例贴图
-    ├── red_brick_diff_4k.jpg      # 红砖漫反射贴图
-    ├── red_brick_nor_gl_4k.exr    # 红砖法线贴图
-    ├── red_brick_rough_4k.exr     # 红砖粗糙度贴图
-    └── red_brick_disp_4k.png      # 红砖位移贴图
+    ├── metal/                     # Metal063 4K PBR 贴图组
+    │   ├── Metal063_4K-JPG_Color.jpg
+    │   ├── Metal063_4K-JPG_NormalGL.jpg
+    │   ├── Metal063_4K-JPG_Metalness.jpg
+    │   ├── Metal063_4K-JPG_Roughness.jpg
+    │   └── Metal063_4K-JPG_Displacement.jpg
+    ├── red_brick/                 # 红砖 4K PBR 贴图组
+    │   ├── red_brick_diff_4k.jpg
+    │   ├── red_brick_nor_gl_4k.exr
+    │   ├── red_brick_rough_4k.exr
+    │   └── red_brick_disp_4k.png
+    └── rusty_metal/               # 锈金属 4K PBR 贴图组
+        ├── rusty_metal_05_diff_4k.jpg
+        ├── rusty_metal_05_nor_gl_4k.exr
+        ├── rusty_metal_05_rough_4k.exr
+        └── rusty_metal_05_disp_4k.png
 ```
 
 ---
@@ -76,8 +90,15 @@ Assets/
    - 选择 `TransparentCutout` 时会显示 **Alpha Cutout Threshold** 滑条
    - 调整 **Dot Density**（点阵密度）和 **Dot Radius**（点半径）控制镂空效果
    - 调整 **Dot Scale X/Y** 可拉伸 UV 方向的点阵形状
-4. **分配贴图**：将主纹理拖入 **Color** 槽位，法线贴图拖入 **Normal** 槽位
-5. **调整法线强度**：通过 **Normal strength** 滑条控制凹凸程度
+4. **分配贴图**：
+   - **Color** → 主纹理（反照率）
+   - **Normal** → 法线贴图
+   - **Metalness mask** → 金属度遮罩纹理
+   - **Specular map** → 镜面反射纹理
+5. **调整参数**：
+   - **Normal strength** — 控制法线凹凸程度
+   - **Metalness** — 全局金属度系数
+   - **Specular tint** — 镜面反射色调
 6. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
 
 ---
@@ -90,6 +111,10 @@ Assets/
 | `Tint` | Color | 颜色 tint，与纹理颜色相乘 |
 | `Normal` | 2D 贴图 | 法线贴图（OpenGL 格式），凹凸细节来源 |
 | `Normal strength` | Range(0, 1) | 法线强度，控制凹凸程度 |
+| `Metalness mask` | 2D 贴图 | 金属度遮罩纹理（R 通道控制金属度） |
+| `Metalness` | Range(0, 1) | 全局金属度系数，与遮罩纹理相乘 |
+| `Specular map` | 2D 贴图 | 镜面反射纹理 |
+| `Specular tint` | Color | 镜面反射色调 |
 | `Smoothness` | Range(0, 1) | 光滑度（影响高光锐利度） |
 | `Dot Density` | Float | 点阵密度，值越大点越密集 |
 | `Dot Radius` | Range(0, 0.5) | 每个点的半径大小 |
@@ -160,6 +185,19 @@ normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
 ---
 
 ## 🔄 Changelog
+
+### — 金属度 / 镜面反射贴图 + Bug 修复
+
+**Bug 修复：**
+- 修复 `#pragma _NORMALMAP` 语法错误，改为 `#define _NORMALMAP`
+
+**新增功能：**
+- 添加金属度遮罩贴图 (`_MetalnessMask`) 和全局金属度系数 (`_Metalness`)
+- 添加镜面反射贴图 (`_SpecularMap`) 和镜面反射色调 (`_SpecularTint`)
+- 新增 Metal063 和 rusty_metal_05 两套 4K PBR 贴图组
+- 贴图集重组为 `metal/`、`red_brick/`、`rusty_metal/` 子目录
+
+---
 
 ### — PBR + 法线贴图升级
 
