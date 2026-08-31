@@ -1,4 +1,3 @@
-using System.Net.NetworkInformation;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -13,6 +12,10 @@ public class MyLitCustomInspector : ShaderGUI
     {
         // 近正面，不裁剪，双面法线
         FrontOnly, NoCulling, DoubleSided
+    }
+    public enum BlendType
+    {
+        Alpha, Premultiplied, Additive, Multiply
     }
 
     // 解决切换着色器后，在操作下拉菜单前材质无法初始化的问题
@@ -41,6 +44,7 @@ public class MyLitCustomInspector : ShaderGUI
 
         Material material = materialEditor.target as Material;
         var surfaceProp = BaseShaderGUI.FindProperty("_SurfaceType", properties, true);
+        var blendProp = BaseShaderGUI.FindProperty("_BlendType", properties, true);
         var faceProp = BaseShaderGUI.FindProperty("_FaceRenderingMode", properties, true);
 
 
@@ -64,6 +68,14 @@ public class MyLitCustomInspector : ShaderGUI
         }
 
 #if UNITY_2022_1_OR_NEWER
+    MaterialEditor.BeginProperty(blendProp);
+#endif
+    blendProp.floatValue = (int)(BlendType)EditorGUILayout.EnumPopup("Blend type", (BlendType)blendProp.floatValue);
+#if UNITY_2022_1_OR_NEWER
+    MaterialEditor.EndProperty();
+#endif
+
+#if UNITY_2022_1_OR_NEWER
         MaterialEditor.BeginProperty(faceProp);
 #endif
         faceProp.floatValue = (int)(FaceRenderingMode)EditorGUILayout.EnumPopup("Face rendering mode", (FaceRenderingMode)faceProp.floatValue);
@@ -71,17 +83,28 @@ public class MyLitCustomInspector : ShaderGUI
         MaterialEditor.EndProperty();
 #endif
 
+        // 绘制默认的检视面板，包含你材质中所有没有标记HideInInspector属性的其它属性
+        // 这个函数移动位置了，为了在法线贴图更改时调用 UpdateSurfaceType
+        base.OnGUI(materialEditor, properties);
+
         if (EditorGUI.EndChangeCheck())
         {
             UpdateSurfaceType(material);
         }
-        // 绘制默认的检视面板，包含你材质中所有没有标记HideInInspector属性的其它属性
-        base.OnGUI(materialEditor, properties);
-
     }
 
     private void UpdateSurfaceType(Material material)
     {
+        // 未分配法线贴图纹理时禁用一个关键字
+        if(material.GetTexture("_NormalMap") == null)
+        {
+            material.DisableKeyword("_NORMALMAP");
+        }
+        else
+        {
+            material.EnableKeyword("_NORMALMAP");
+        }
+
         SurfaceType surface = (SurfaceType)material.GetFloat("_SurfaceType");
         // 设置排队序号
         switch (surface)
@@ -99,6 +122,7 @@ public class MyLitCustomInspector : ShaderGUI
                 material.SetOverrideTag("RenderType", "Transparent");
                 break;
         }
+        BlendType blend = (BlendType)material.GetFloat("_BlendType");
         // 设置颜色怎么叠和深度怎么写
         switch (surface)
         {   // 情况A Opaque和TransparentCutout 不透明和镂空
@@ -114,11 +138,61 @@ public class MyLitCustomInspector : ShaderGUI
                 break;
             // 情况B TransparentBlend 半透明混合
             case SurfaceType.TransparentBlend:
-                material.SetInt("_SourceBlend", (int)BlendMode.SrcAlpha);
-                material.SetInt("_DestBlend", (int)BlendMode.OneMinusSrcAlpha);
+                switch (blend)
+                {
+                    // 标准半透明子分支
+                    case BlendType.Alpha:
+                        material.SetInt("_SourceBlend", (int)BlendMode.SrcAlpha);
+                        material.SetInt("_DestBlend", (int)BlendMode.OneMinusSrcAlpha);
+                        break;
+                    // 预乘半透明，玻璃效果子分支
+                    case BlendType.Premultiplied:
+                        material.SetInt("_SourceBlend", (int)BlendMode.One);
+                        material.SetInt("_DestBlend", (int)BlendMode.OneMinusSrcAlpha);
+                        break;
+                    // 加法混合子分支，提亮场景
+                    case BlendType.Additive:
+                        material.SetInt("_SourceBlend", (int)BlendMode.SrcAlpha);
+                        material.SetInt("_DestBlend", (int)BlendMode.One);
+                        break;
+                    // 乘法混合子分支，变暗场景
+                    case BlendType.Multiply:
+                        material.SetInt("_SourceBlend", (int)BlendMode.Zero);
+                        material.SetInt("_DestBlend", (int)BlendMode.SrcColor);
+                        break;
+                }
+                // 最开始是半透明混合部分的，被挤压到分支末尾了
                 material.SetInt("_ZWrite", 0);
                 // material.SetShaderPassEnabled("ShadowCaster", false);
                 break;
+        }
+        // 这里是增加玻璃效果的，和我写在里面那种效果一样，但那边那个我已经注释掉
+        if(surface == SurfaceType.TransparentBlend && blend == BlendType.Premultiplied)
+        {
+            material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
+        else
+        {
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
+        // shader_feature_local 关键字需要你在 C# 中显式调用才能激活变体
+        // 根据是否分配了法线贴图来启用/禁用 _NORMALMAP 关键字
+        if (material.GetTexture("_NormalMap"))
+        {
+            material.EnableKeyword("_NORMALMAP");
+        }
+        else
+        {
+            material.DisableKeyword("_NORMALMAP");
+        }
+        // 根据清漆强度是否大于0来决定启用/禁用关键字
+        if(material.GetFloat("_ClearCoatStrength") > 0)
+        {
+            material.EnableKeyword("_CLEARCOATMAP");
+        }
+        else
+        {
+            material.DisableKeyword("_CLEARCOATMAP");
         }
         // 处理阴影，只要不是半透明混合模式就投射阴影
         material.SetShaderPassEnabled("ShadowCaster", surface != SurfaceType.TransparentBlend);

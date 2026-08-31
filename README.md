@@ -1,29 +1,40 @@
 # Unity URP Shader — MyLit
 
-一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果，支持 **法线贴图**、**金属度贴图** 和 **镜面反射贴图**。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
+一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果，支持 **法线贴图**、**金属度贴图**、**镜面反射贴图**、**粗糙度贴图**、**自发光**、**视差贴图** 和 **清漆（Clear Coat）** 效果。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
 
 ---
 
 ## ✨ 特性
 
 - **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
+- **双工作流支持**：
+  - **金属度工作流**（默认）：金属度遮罩纹理 + 全局金属度系数，控制 F0 反射率
+  - **镜面反射工作流**：镜面反射纹理 + 色调调节
 - **法线贴图支持**：完整的 TBN 切线空间转换，可调节法线强度
-- **金属度贴图**：支持金属度遮罩纹理 + 全局金属度系数，控制 F0 反射率
-- **镜面反射贴图**：支持镜面反射纹理 + 色调调节
+- **粗糙度贴图**：支持粗糙度/平滑度遮罩纹理，与全局系数联动
+- **自发光贴图**：支持 HDR 自发光色调，可驱动后处理 Bloom
+- **视差贴图（Parallax Mapping）**：基于高度图的 UV 偏移采样，增加表面深度感
+- **清漆效果（Clear Coat）**：支持清漆遮罩 + 强度 + 光滑度，模拟车漆/漆面多层反射
 - **程序化点阵镂空**：通过数学计算在片元着色器中生成圆形点阵，实现半色调（halftone）镂空效果
 - **多种表面类型**：
   - `Opaque` — 不透明
   - `TransparentCutout` — 透明裁切（点阵镂空）
   - `TransparentBlend` — 半透明混合
+- **多种混合模式**（TransparentBlend 下可用）：
+  - `Alpha` — 标准半透明
+  - `Premultiplied` — 预乘半透明（玻璃效果）
+  - `Additive` — 加法混合（提亮场景）
+  - `Multiply` — 乘法混合（变暗场景）
 - **面渲染模式**：
   - `FrontOnly` — 正面渲染（背面剔除）
   - `NoCulling` — 双面渲染，无法线翻转
   - `DoubleSided` — 双面渲染，自动翻转背面法线
 - **Alpha 裁切**：可切换裁切阈值，镂空区域基于点阵密度动态计算
-- **自定义材质检视面板**：下拉菜单控制 Surface Type 和 Face Rendering Mode，自动同步 Blend / ZWrite / Cull / Shader Keywords
+- **自定义材质检视面板**：下拉菜单控制 Surface Type / Blend Type / Face Rendering Mode，自动同步 Blend / ZWrite / Cull / Shader Keywords
 - **SRP Batcher 兼容**：使用 `CBUFFER_START(UnityPerMaterial)` 包裹材质属性
 - **DEBUG_DISPLAY 支持**：可配合 Unity 渲染调试器查看法线数据
 - **多版本兼容**：支持 Unity 2021.3+ 和 2022+ 的 API 差异
+- **Shader Variant 优化**：使用 `shader_feature_local` / `shader_feature_local_fragment` 按需编译变体，减少包体
 
 ---
 
@@ -88,34 +99,100 @@ Assets/
 3. **配置材质**：
    - 在 Inspector 中设置 **Surface Type** 和 **Face Rendering Mode**
    - 选择 `TransparentCutout` 时会显示 **Alpha Cutout Threshold** 滑条
+   - 选择 `TransparentBlend` 时会显示 **Blend Type** 下拉菜单
+   - 切换 **Use specular workflow** 可在金属度 / 镜面反射工作流之间切换
+   - 启用 **Use roughness texture** 可激活粗糙度贴图采样
    - 调整 **Dot Density**（点阵密度）和 **Dot Radius**（点半径）控制镂空效果
    - 调整 **Dot Scale X/Y** 可拉伸 UV 方向的点阵形状
 4. **分配贴图**：
    - **Color** → 主纹理（反照率）
    - **Normal** → 法线贴图
    - **Metalness mask** → 金属度遮罩纹理
-   - **Specular map** → 镜面反射纹理
+   - **Specular map** → 镜面反射纹理（仅 Specular 工作流）
+   - **Smoothness mask** → 平滑度/粗糙度遮罩纹理
+   - **Emission map** → 自发光纹理
+   - **Height/displacement map** → 视差高度图
+   - **Clear coat mask** → 清漆遮罩纹理
+   - **Clear coat smoothness mask** → 清漆光滑度遮罩纹理
 5. **调整参数**：
    - **Normal strength** — 控制法线凹凸程度
    - **Metalness** — 全局金属度系数
    - **Specular tint** — 镜面反射色调
+   - **Smoothness** — 全局光滑度系数
+   - **Emission tint** — HDR 自发光色调
+   - **Parallax strength** — 视差偏移强度
+   - **Clear coat strength** — 清漆强度
+   - **Clear coat smoothness** — 清漆光滑度
 6. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
 
 ---
 
 ## 🎨 参数说明
 
+### 基础参数
+
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `Color` | 2D 贴图 | 主纹理（RGB = 反照率, A = 透明度） |
 | `Tint` | Color | 颜色 tint，与纹理颜色相乘 |
+
+### 工作流切换
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `Use specular workflow` | Toggle | 开启后使用镜面反射工作流，关闭使用金属度工作流 |
+| `Use roughness texture` | Toggle | 开启后启用粗糙度贴图采样 |
+
+### 法线 & 视差
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
 | `Normal` | 2D 贴图 | 法线贴图（OpenGL 格式），凹凸细节来源 |
 | `Normal strength` | Range(0, 1) | 法线强度，控制凹凸程度 |
+| `Height/displacement map` | 2D 贴图 | 视差高度图，用于 UV 偏移采样 |
+| `Parallax strength` | Range(0, 1) | 视差偏移强度 |
+
+### 金属度工作流
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
 | `Metalness mask` | 2D 贴图 | 金属度遮罩纹理（R 通道控制金属度） |
 | `Metalness` | Range(0, 1) | 全局金属度系数，与遮罩纹理相乘 |
+
+### 镜面反射工作流
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
 | `Specular map` | 2D 贴图 | 镜面反射纹理 |
 | `Specular tint` | Color | 镜面反射色调 |
-| `Smoothness` | Range(0, 1) | 光滑度（影响高光锐利度） |
+
+### 光滑度 & 粗糙度
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `Smoothness mask` | 2D 贴图 | 平滑度/粗糙度遮罩纹理 |
+| `Smoothness` | Range(0, 1) | 全局光滑度系数（Roughness 模式下：贴图白=粗糙，黑=光滑） |
+
+### 自发光
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `Emission map` | 2D 贴图 | 自发光纹理 |
+| `Emission tint` | Color (HDR) | HDR 自发光色调，可驱动 Bloom 后处理 |
+
+### 清漆效果
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `Clear coat mask` | 2D 贴图 | 清漆遮罩纹理 |
+| `Clear coat strength` | Range(0, 1) | 清漆强度，>0 时启用清漆效果 |
+| `Clear coat smoothness mask` | 2D 贴图 | 清漆光滑度遮罩纹理 |
+| `Clear coat smoothness` | Range(0, 1) | 清漆光滑度系数 |
+
+### 点阵镂空
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
 | `Dot Density` | Float | 点阵密度，值越大点越密集 |
 | `Dot Radius` | Range(0, 0.5) | 每个点的半径大小 |
 | `Dot Scale X` | Range(0.1, 5) | X 方向点阵拉伸 |
@@ -130,8 +207,20 @@ Assets/
 
 | Pass | LightMode | 作用 |
 |------|-----------|------|
-| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 点阵镂空 + Alpha 裁切 |
+| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 |
 | `ShadowCaster` | `ShadowCaster` | 阴影投射通道，支持带 Alpha 裁切的阴影生成 |
+
+### Shader Variant 关键字
+
+| 关键字 | 类型 | 说明 |
+|--------|------|------|
+| `_NORMALMAP` | `shader_feature_local_fragment` | 法线贴图，有法线贴图时启用 |
+| `_SPECULAR_SETUP` | `shader_feature_local_fragment` | 镜面反射工作流切换 |
+| `_ROUGHNESS_SETUP` | `shader_feature_local_fragment` | 粗糙度贴图模式 |
+| `_CLEARCOATMAP` | `shader_feature_local` | 清漆效果，强度 >0 时启用 |
+| `_ALPHA_CUTOUT` | `shader_feature_local` | Alpha 裁切（Cutout 模式） |
+| `_DOUBLE_SIDED_NORMALS` | `shader_feature_local` | 双面法线翻转 |
+| `_ALPHAPREMULTIPLY_ON` | `shader_feature_local_fragment` | 预乘 Alpha 混合（玻璃效果） |
 
 ### 程序化点阵镂空算法
 
@@ -148,6 +237,15 @@ float CalculateDotMatrix(float2 uv, float density, float radius, float2 scale) {
 ```
 
 该函数的返回值直接覆盖纹理的 alpha 通道，随后由 `clip()` 进行硬裁切。
+
+### 视差贴图（Parallax Mapping）
+
+视差效果通过 URP 内置 `ParallaxMapping.hlsl` 实现，在片元着色器中对 UV 进行视角相关的偏移采样：
+
+```hlsl
+float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS);
+uv += ParallaxMapping(TEXTURE2D_ARGS(_ParallaxMap, sampler_ParallaxMap), viewDirTS, _ParallaxStrength, uv);
+```
 
 ### 法线贴图管线
 
@@ -174,7 +272,14 @@ normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
 |-------------|-------------|-------|--------|---------------------|
 | Opaque | Geometry | One / Zero | On | ❌ |
 | TransparentCutout | AlphaTest | One / Zero | On | ✅ |
-| TransparentBlend | Transparent | SrcAlpha / OneMinusSrcAlpha | Off | ❌ |
+| TransparentBlend | Transparent | 见下方混合模式表 | Off | ❌ |
+
+| Blend Type | Source Blend | Dest Blend | Premultiply Keyword |
+|-----------|-------------|-----------|---------------------|
+| Alpha | SrcAlpha | OneMinusSrcAlpha | ❌ |
+| Premultiplied | One | OneMinusSrcAlpha | ✅ |
+| Additive | SrcAlpha | One | ❌ |
+| Multiply | Zero | SrcColor | ❌ |
 
 | Face Rendering Mode | Cull Mode | Double-Sided Normals Keyword |
 |--------------------|-----------|------------------------------|
@@ -185,6 +290,22 @@ normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
 ---
 
 ## 🔄 Changelog
+
+### — 清漆 / 自发光 / 视差 / 粗糙度贴图 / 混合模式升级
+
+**新增功能：**
+- 添加 **清漆效果**（Clear Coat）：清漆遮罩 + 强度 + 光滑度遮罩 + 光滑度系数
+- 添加 **自发光贴图**（Emission Map）+ HDR 自发光色调
+- 添加 **视差贴图**（Parallax Mapping）：高度图 + 偏移强度，基于 URP 内置 `ParallaxMapping.hlsl`
+- 添加 **粗糙度贴图**（Roughness Texture）支持，通过 `Use roughness texture` 切换
+- 添加 **双工作流切换**：金属度工作流 ↔ 镜面反射工作流
+- 添加 **多种混合模式**：Alpha / Premultiplied / Additive / Multiply
+- 添加 `_ALPHAPREMULTIPLY_ON` 关键字支持预乘 Alpha 玻璃效果
+- Shader 关键字从 `#define` 全面升级为 `shader_feature_local` / `shader_feature_local_fragment`，按需编译变体
+- 自定义 Inspector 新增 Blend Type 下拉菜单，自动管理 `_NORMALMAP` / `_CLEARCOATMAP` / `_ALPHAPREMULTIPLY_ON` 关键字
+- 法线贴图关键字改为根据是否分配纹理自动启用/禁用
+
+---
 
 ### — 金属度 / 镜面反射贴图 + Bug 修复
 

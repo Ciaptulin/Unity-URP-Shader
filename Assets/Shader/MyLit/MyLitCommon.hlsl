@@ -8,10 +8,16 @@
 CBUFFER_START(UnityPerMaterial)
 float4 _ColorTint;
 float4 _ColorMap_ST; // 这是Unity自动设置的，供TRANSFORM_TEX使用来应用UV平铺
+float _Cutoff; // 让给GPU接收到透明度裁切阈值的滑条值
 float _NormalStrength;
 float _Metalness;
+float4 _SpecularTint;
 float _Smoothness;
-float _Cutoff; // 让给GPU接收到透明度裁切阈值的滑条值
+float3 _EmissionTint;
+float _ParallaxStrength;
+float _ClearCoatStrength;
+float _ClearCoatSmoothness;
+
 // 程序化生成镂空材质
 float _DotDensity; // 点的密度（比如 10.0）
 float _DotRadius;  // 点的半径（比如 0.3）
@@ -22,6 +28,12 @@ CBUFFER_END
 TEXTURE2D(_ColorMap); SAMPLER(sampler_ColorMap); // RGB = albedo, A = alpha
 TEXTURE2D(_NormalMap); SAMPLER(sampler_NormalMap);
 TEXTURE2D(_MetalnessMask); SAMPLER(sampler_MetalnessMask);
+TEXTURE2D(_SpecularMap); SAMPLER(sampler_SpecularMap);
+TEXTURE2D(_SmoothnessMask); SAMPLER(sampler_SmoothnessMask);
+TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
+TEXTURE2D(_ParallaxMap); SAMPLER(sampler_ParallaxMap);
+TEXTURE2D(_ClearCoatMask); SAMPLER(sampler_ClearCoatMask);
+TEXTURE2D(_ClearCoatSmoothnessMask); SAMPLER(sampler_ClearCoatSmoothnessMask);
 
 void TestAlphaClip(float4 colorSample) {
 #ifdef _ALPHA_CUTOUT

@@ -11,9 +11,20 @@ Shader "Custom/MyLit"
         _NormalStrength("Normal strength", Range(0, 1)) = 1
         [NoScaleOffset] _MetalnessMask("Metalness mask", 2D) = "white" {}
         _Metalness("Metalness", Range(0,1)) = 0
+        [Toggle(_SPECULAR_SETUP)] _SpecularSetupToggle("Use specular workflow", Float) = 0
+        [Toggle(_ROUGHNESS_SETUP)] _RoughnessSetupToggle("Use roughness texture", Float) = 0
         [NoScaleOffset] _SpecularMap("Specular map", 2D) = "white" {}
         _SpecularTint("Specular tint", Color) = (1,1,1,1)
+        [NoScaleOffset] _SmoothnessMask("Smoothness mask", 2D) = "white" {}
         _Smoothness("Smoothness", Range(0,1)) = 0.5
+        [NoScaleOffset] _EmissionMap("Emission map", 2D) = "white" {}
+        [HDR]_EmissionTint("Emission tint", Color) = (0,0,0,0)
+        [NoScaleOffset] _ParallaxMap("Height/displacement map", 2D) = "white" {}
+        _ParallaxStrength("Parallax strength", Range(0,1)) = 0.005
+        [NoScaleOffset] _ClearCoatMask("Clear coat mask", 2D) = "white" {}
+        _ClearCoatStrength("Clear coat strength", Range(0,1)) = 0
+        [NoScaleOffset] _ClearCoatSmoothnessMask("Clear coat smoothness mask", 2D) = "white" {}
+        _ClearCoatSmoothness("Clear coat smoothness", Range(0,1)) = 0
 
         _DotDensity("Dot Density", Float) = 10
         _DotRadius("Dot Radius", Range(0,0.5)) = 0.2
@@ -30,6 +41,7 @@ Shader "Custom/MyLit"
         [HideInInspector] _ZWrite("ZWrite", Float) = 0
 
         [HideInInspector] _SurfaceType("Surface type", Float) = 0
+        [HideInInspector] _BlendType("Blend type", Float) = 0
         [HideInInspector] _FaceRenderingMode("Face rendering type", Float) = 0
 
         
@@ -51,10 +63,18 @@ Shader "Custom/MyLit"
         Cull[_Cull]
         HLSLPROGRAM // Begin HLSL code
             // #define _SPECULAR_COLOR // 切换为 PBR，默认包含镜面高光，此部分不再需要
-            #define _NORMALMAP
-            //#pragma shader_feature _NORMALMAP
+            //#define _NORMALMAP
+            #pragma shader_feature_local_fragment _NORMALMAP
+            // #define _CLEARCOATMAP
+            #pragma shader_feature_local _CLEARCOATMAP
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
+            // #define _SPECULAR_SETUP // 设置了Toggle属性，这里被变体替换
+            #pragma shader_feature_local_fragment _SPECULAR_SETUP
+            // 这里我主动适配了粗糙度贴图
+            #pragma shader_feature_local_fragment _ROUGHNESS_SETUP
+            #pragma shader_feature_local_fragment _ALPHAPREMULTIPLY_ON
+
 #if UNITY_VERSION >= 202120
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
 #else

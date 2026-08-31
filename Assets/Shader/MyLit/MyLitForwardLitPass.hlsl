@@ -4,6 +4,7 @@
 #define MY_LIT_FORWARD_LIT_PASS_INCLUDED
 // 引入URP库函数和我们自己的通用函数
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/ParallaxMapping.hlsl"
 #include "MyLitCommon.hlsl"
 // 此属性结构体接收当前渲染网格的相关数据
 // 数据会根据语义自动填充到对应字段中
@@ -23,8 +24,9 @@ struct Interpolators {
     float2 uv : TEXCOORD0;
     float3 positionWS : TEXCOORD1;
     float3 normalWS : TEXCOORD2;
+    #ifdef _NORMALMAP
     float4 tangentWS : TEXCOORD3;
-
+    #endif
 };
 
 // #ifndef MY_LIT_COMMON_INCLUDED
@@ -58,7 +60,9 @@ Interpolators Vertex(Attributes input) {
     // 顶点函数里使用采样器采样uv
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
     output.normalWS = normInput.normalWS;
+    #ifdef _NORMALMAP
     output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
+    #endif
     output.positionWS = posnInputs.positionWS;
 
     return output;
@@ -77,29 +81,42 @@ float4 Fragment(Interpolators input
     , FRONT_FACE_TYPE frontFace : FRONT_FACE_SEMANTIC
     #endif
     ) : SV_TARGET {
-    float2 uv = input.uv;
-    // return float4(uv, 0, 1); // uv可视化
-    // 颜色映射样例
-    float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv);
-    // 注释掉原来的colorSample需要再声明一个
-    //float4 colorSample = float4(1,1,1,1); // 底色，可以改其它颜色
-    //float3 normalWS = UnpackNormal(colorSample); // 先借用下颜色贴图通道,尝试 法线贴图与切线空间时用
-    // -------程序化点阵镂空-------
-    colorSample.a = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius, float2(_DotScaleX, _DotScaleY));
-
-    // 括号内的值小于0，直接把这个像素丢弃
-    // clip(colorSample.a * _ColorTint.a - 0.5);
-    TestAlphaClip(colorSample);
-
+    // 重排代码
     float3 normalWS = normalize(input.normalWS);
     #ifdef _DOUBLE_SIDED_NORMALS
     normalWS *= IS_FRONT_VFACE(frontFace, 1, -1);
     #endif
+    // 重排代码，法线和视线方向在任何纹理采样之前计算，我们需要根据这些值计算新UV
+    // 过程中使用这些 positionWS 和 viewDirectionWS 变量，转化后再传入input内
+    // 这里就是把变量转移出来用
+    float3 positionWS = input.positionWS;
+    float3 viewDirWS = GetWorldSpaceNormalizeViewDir(input.positionWS); // In ShaderVariablesFunctions.hlsl
+    #ifdef _NORMALMAP
+    float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS); // In ParallaxMapping.hlsl
+    #endif
+    float2 uv = input.uv; // 拿出uv
+    // return float4(uv, 0, 1); // uv可视化
+    #ifdef _NORMALMAP
+    // 对uv进行偏移采样
+    uv += ParallaxMapping(TEXTURE2D_ARGS(_ParallaxMap, sampler_ParallaxMap), viewDirTS, _ParallaxStrength, uv);
+    #endif
+    // 颜色映射样例
+    float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv) * _ColorTint;
+    // 括号内的值小于0，直接把这个像素丢弃
+    // clip(colorSample.a * _ColorTint.a - 0.5);
+    TestAlphaClip(colorSample);
 
-    // 法线贴图采样与TBN转换
-    float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
+// 这里一直在写宏，看上去像是在优化性能
+#ifdef _NORMALMAP
     float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, uv), _NormalStrength);
+    // tangentToWorld 必须在守卫外计算，否则渲染调试器的 "Lighting Without Normal Maps" 模式会出错
+    float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
     normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
+#else
+    float3 normalTS = float3(0, 0, 1); // 默认平法线，_NORMALMAP 未启用时给调试器兜底
+    float3x3 tangentToWorld = float3x3(1,0,0, 0,1,0, 0,0,1);
+    normalWS = normalize(normalWS);
+#endif
 
     // return float4(normalWS * 0.5 + 0.5, 1);  // 测试法线贴图，旋转模型法线应跟着走
     // return float4((normalWS + 1) * 0.5, 1); // 向量重映射
@@ -107,9 +124,9 @@ float4 Fragment(Interpolators input
     lightingInput.positionWS = input.positionWS;
     // 设置世界空间法线，数据是走Interpolators来的，input接应了这个结构体
     // lightingInput.normalWS = normalize(input.normalWS) * IS_FRONT_VFACE(frontFace, 1, -1);
-    // 89行已经用了守卫关键字，会处理好条件翻转，这里直接传值就好了
-    lightingInput.normalWS = normalWS;
-    lightingInput.viewDirectionWS = GetWorldSpaceNormalizeViewDir(input.positionWS);
+    // 守卫关键字会处理好条件翻转，这里直接传值就好了
+    lightingInput.normalWS = normalWS; // 之前干啥了：拿到viewDirWS给GetViewDirectionTangentSpace使用
+    lightingInput.viewDirectionWS = viewDirWS; // 之前干啥了：拿到viewDirTS用于UV偏移采样
     lightingInput.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
 #if UNITY_VERSION >= 202120
     lightingInput.positionCS = input.positionCS;
@@ -117,13 +134,36 @@ float4 Fragment(Interpolators input
     lightingInput.tangentToWorld = tangentToWorld; // 提供转换矩阵
 #endif
 
+    // -------程序化点阵镂空-------
+    colorSample.a = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius, float2(_DotScaleX, _DotScaleY));
+
     SurfaceData surfaceInput = (SurfaceData)0;
-    surfaceInput.albedo = colorSample.rgb * _ColorTint.rgb;
+    surfaceInput.albedo = colorSample.rgb; //  * _ColorTint.rgb; // 98行已经乘过了
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
+    #ifdef _SPECULAR_SETUP
+    surfaceInput.specular = SAMPLE_TEXTURE2D(_SpecularMap, sampler_SpecularMap, uv).rgb * _SpecularTint;
+    surfaceInput.metallic = 0;
+    #else
     surfaceInput.specular = 1;
     surfaceInput.metallic = SAMPLE_TEXTURE2D(_MetalnessMask, sampler_MetalnessMask, uv).r * _Metalness;
-    surfaceInput.metallic = _Metalness;
-    surfaceInput.smoothness = _Smoothness;
+    #endif
+
+    // 适配粗糙度roughness贴图（平滑度的反值）
+    float smoothnessSample = SAMPLE_TEXTURE2D(_SmoothnessMask, sampler_SmoothnessMask, uv).r; // * _Smoothness; // 第三回合，适配粗糙度模式，现在这个单拿出来后面乘
+    #ifdef _ROUGHNESS_SETUP
+    surfaceInput.smoothness = 1 - smoothnessSample; // 粗糙度模式：贴图白=粗糙，黑=光滑
+    #else
+    surfaceInput.smoothness = smoothnessSample * _Smoothness; // 平滑度模式：滑条控制强度
+    #endif
+    // 拿到守卫关键字里面去处理了，适配平滑度模式
+    // surfaceInput.smoothness = smoothnessSample;
+    // surfaceInput.metallic = _Metalness;  // 这个值已经在采样时乘过去了，不需要再单独赋值了
+    // surfaceInput.smoothness = _Smoothness; // 同上
+    surfaceInput.emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, uv).rgb * _EmissionTint;
+#ifdef _CLEARCOATMAP
+    surfaceInput.clearCoatMask = SAMPLE_TEXTURE2D(_ClearCoatMask, sampler_ClearCoatMask, uv).r * _ClearCoatStrength;
+    surfaceInput.clearCoatSmoothness = SAMPLE_TEXTURE2D(_ClearCoatSmoothnessMask, sampler_ClearCoatSmoothnessMask, uv).r * _ClearCoatSmoothness;
+#endif
     // 调试钩子，给 Unity 内部调试工具“喂数据”，不影响眼前的光照颜色
     surfaceInput.normalTS = normalTS; // 提供原始切线法线
     // 现在切PBR了，这里不需要了  最后再乘个色调
@@ -132,6 +172,7 @@ float4 Fragment(Interpolators input
 // #else
 //     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
 // #endif
+
     return UniversalFragmentPBR(lightingInput, surfaceInput);
 }
 
