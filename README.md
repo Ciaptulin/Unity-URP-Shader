@@ -7,6 +7,10 @@
 ## ✨ 特性
 
 - **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
+- **附加光源支持**：完整的多光源前向渲染，支持附加光源阴影 (`_ADDITIONAL_LIGHTS` / `_ADDITIONAL_LIGHTS_SHADOWS`)
+- **反射探针**：支持反射探针混合与盒投影 (`_REFLECTION_PROBE_BLENDING` / `_REFLECTION_PROBE_BOX_PROJECTION`)
+- **光源层级**：兼容 URP 光源层级系统 (`_LIGHT_LAYERS`)
+- **屏幕空间遮挡**：支持屏幕空间环境光遮蔽 (`_SCREEN_SPACE_OCCLUSION`)
 - **双工作流支持**：
   - **金属度工作流**（默认）：金属度遮罩纹理 + 全局金属度系数，控制 F0 反射率
   - **镜面反射工作流**：镜面反射纹理 + 色调调节
@@ -58,7 +62,8 @@ Assets/
 │   └── MyLitSphere.mat            # 示例材质
 ├── Scenes/
 │   └── SampleScene.unity          # 示例场景
-├── Script/                        # （预留脚本目录）
+├── Script/
+│   └── AdditionalLightShadowController.cs  # 附加光源阴影控制脚本
 ├── Settings/                      # URP 设置资源
 │   ├── URP-Balanced.asset         # URP Balanced 管线配置
 │   ├── URP-HighFidelity.asset     # URP High Fidelity 管线配置
@@ -207,10 +212,12 @@ Assets/
 
 | Pass | LightMode | 作用 |
 |------|-----------|------|
-| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 |
+| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 + 附加光源 + 反射探针 + 屏幕空间遮挡 |
 | `ShadowCaster` | `ShadowCaster` | 阴影投射通道，支持带 Alpha 裁切的阴影生成 |
 
 ### Shader Variant 关键字
+
+#### Shader Features（按需编译）
 
 | 关键字 | 类型 | 说明 |
 |--------|------|------|
@@ -221,6 +228,20 @@ Assets/
 | `_ALPHA_CUTOUT` | `shader_feature_local` | Alpha 裁切（Cutout 模式） |
 | `_DOUBLE_SIDED_NORMALS` | `shader_feature_local` | 双面法线翻转 |
 | `_ALPHAPREMULTIPLY_ON` | `shader_feature_local_fragment` | 预乘 Alpha 混合（玻璃效果） |
+
+#### Multi Compile（URP 全局关键字）
+
+| 关键字 | 类型 | 说明 |
+|--------|------|------|
+| `_MAIN_LIGHT_SHADOWS` | `multi_compile` | 主光源阴影 |
+| `_MAIN_LIGHT_SHADOWS_CASCADE` | `multi_compile` | 级联阴影 |
+| `_SHADOWS_SOFT` | `multi_compile_fragment` | 软阴影 |
+| `_ADDITIONAL_LIGHTS` | `multi_compile` | 附加光源 |
+| `_ADDITIONAL_LIGHTS_SHADOWS` | `multi_compile_fragment` | 附加光源阴影 |
+| `_REFLECTION_PROBE_BLENDING` | `multi_compile_fragment` | 反射探针混合 |
+| `_REFLECTION_PROBE_BOX_PROJECTION` | `multi_compile_fragment` | 反射探针盒投影 |
+| `_LIGHT_LAYERS` | `multi_compile_fragment` | 光源层级 |
+| `_SCREEN_SPACE_OCCLUSION` | `multi_compile_fragment` | 屏幕空间环境光遮蔽 |
 
 ### 程序化点阵镂空算法
 
@@ -296,9 +317,40 @@ normalWS = normalize(normalWS);
 | NoCulling | Off | ❌ |
 | DoubleSided | Off | ✅ |
 
+### 附加光源阴影控制器
+
+`Assets/Script/AdditionalLightShadowController.cs` 是一个辅助脚本，用于在编辑器中快速配置附加光源的阴影设置：
+
+```csharp
+public class AdditionalLightShadowController : MonoBehaviour
+{
+    public bool castShadows = true;           // 是否投射阴影
+    public LightShadows shadowType = LightShadows.Soft; // 阴影类型
+}
+```
+
+- 挂载到带有 `Light` 组件的 GameObject 上
+- 在 Inspector 中修改数值时通过 `OnValidate()` 实时应用
+- 支持 `Soft` / `Hard` / `None` 三种阴影类型
+
 ---
 
 ## 🔄 Changelog
+
+### — 附加光源 / 反射探针 / 光源层级 / 屏幕空间遮挡 + 阴影控制脚本
+
+**新增功能：**
+- 添加 **附加光源支持**：`_ADDITIONAL_LIGHTS` + `_ADDITIONAL_LIGHTS_SHADOWS` 多编译变体，完整支持 URP 多光源前向渲染
+- 添加 **反射探针混合与盒投影**：`_REFLECTION_PROBE_BLENDING` + `_REFLECTION_PROBE_BOX_PROJECTION`
+- 添加 **光源层级**支持：`_LIGHT_LAYERS`，兼容 URP 光源层级系统
+- 添加 **屏幕空间环境光遮蔽**：`_SCREEN_SPACE_OCCLUSION`
+- 新增 `AdditionalLightShadowController.cs` 脚本：辅助在编辑器中配置附加光源阴影（类型开关 + Soft/Hard/None）
+
+**影响：**
+- Shader 现在完整支持 URP 高级光照特性，可在复杂多光源场景中使用
+- 附加光源可正确投射阴影，与主光源阴影系统协同工作
+
+---
 
 ### — 法线 & 视差管线解耦 + 架构简化
 

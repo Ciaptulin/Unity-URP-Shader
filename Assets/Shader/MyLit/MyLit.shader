@@ -82,6 +82,17 @@ Shader "Custom/MyLit"
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
 #endif
             #pragma multi_compile_fragment _ _SHADOWS_SOFT // 只影响片元
+            // 添加附加光源支持
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHTS_SHADOWS
+            // 反射探针混合与盒投影
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
+            // 光源层级
+            #pragma multi_compile_fragment _ _LIGHT_LAYERS
+            // 屏幕空间遮挡
+            #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
+
 #if UNITY_VERSION >= 202120
             #pragma multi_compile_fragment _ DEBUG_DISPLAY
 #endif
