@@ -11,6 +11,8 @@
 - **反射探针**：支持反射探针混合与盒投影 (`_REFLECTION_PROBE_BLENDING` / `_REFLECTION_PROBE_BOX_PROJECTION`)
 - **光源层级**：兼容 URP 光源层级系统 (`_LIGHT_LAYERS`)
 - **屏幕空间遮挡**：支持屏幕空间环境光遮蔽 (`_SCREEN_SPACE_OCCLUSION`)
+- **光照贴图烘焙**：完整支持 baked lightmap (`LIGHTMAP_ON` / `DIRLIGHTMAP_COMBINED` / `DYNAMICLIGHTMAP_ON`)，自动回退 SH 探针兜底
+- **自发光参与 GI**：自发光贴图 + HDR 色调可参与光照烘焙 (`_EMISSION` 关键字 + `BakedEmissive` 标记)
 - **双工作流支持**：
   - **金属度工作流**（默认）：金属度遮罩纹理 + 全局金属度系数，控制 F0 反射率
   - **镜面反射工作流**：镜面反射纹理 + 色调调节
@@ -60,10 +62,11 @@ Assets/
 │   └── MyLitCustomInspector.cs    # 自定义材质编辑器
 ├── Material/
 │   └── MyLitSphere.mat            # 示例材质
+├── Models/                        # 3D 模型资源
 ├── Scenes/
-│   └── SampleScene.unity          # 示例场景
-├── Script/
-│   └── AdditionalLightShadowController.cs  # 附加光源阴影控制脚本
+│   ├── SampleScene.unity          # 示例场景
+│   └── SampleScene/               # 场景子资源
+├── Scripts/                       # C# 脚本
 ├── Settings/                      # URP 设置资源
 │   ├── URP-Balanced.asset         # URP Balanced 管线配置
 │   ├── URP-HighFidelity.asset     # URP High Fidelity 管线配置
@@ -71,28 +74,33 @@ Assets/
 │   └── ...                        # 渲染器 & Volume 配置文件
 ├── Shader/
 │   └── MyLit/
-│       ├── MyLit.shader           # 主 Shader 文件（属性 + Pass 定义）
-│       ├── MyLitCommon.hlsl       # 通用函数（点阵计算、Alpha 裁切）
-│       ├── MyLitForwardLitPass.hlsl   # 前向光照通道（顶点 + 片元）
-│       └── MyLitShadowCasterPass.hlsl # 阴影投射通道
-└── Textures/
-    ├── cat.png                    # 示例贴图
-    ├── metal/                     # Metal063 4K PBR 贴图组
-    │   ├── Metal063_4K-JPG_Color.jpg
-    │   ├── Metal063_4K-JPG_NormalGL.jpg
-    │   ├── Metal063_4K-JPG_Metalness.jpg
-    │   ├── Metal063_4K-JPG_Roughness.jpg
-    │   └── Metal063_4K-JPG_Displacement.jpg
-    ├── red_brick/                 # 红砖 4K PBR 贴图组
-    │   ├── red_brick_diff_4k.jpg
-    │   ├── red_brick_nor_gl_4k.exr
-    │   ├── red_brick_rough_4k.exr
-    │   └── red_brick_disp_4k.png
-    └── rusty_metal/               # 锈金属 4K PBR 贴图组
-        ├── rusty_metal_05_diff_4k.jpg
-        ├── rusty_metal_05_nor_gl_4k.exr
-        ├── rusty_metal_05_rough_4k.exr
-        └── rusty_metal_05_disp_4k.png
+│       ├── MyLit.shader              # 主 Shader 文件（属性 + Pass 定义）
+│       ├── MyLitCommon.hlsl          # 通用函数（点阵计算、Alpha 裁切）
+│       ├── MyLitForwardLitPass.hlsl  # 前向光照通道（顶点 + 片元）
+│       ├── MyLitShadowCasterPass.hlsl # 阴影投射通道
+│       ├── MyLitDepthOnlyPass.hlsl   # 深度仅通道（DepthOnly）
+│       ├── MyLitDepthNormalsPass.hlsl # 深度+法线通道（DepthNormals / SSAO）
+│       └── MyLitMetaPass.hlsl        # 光照烘焙元通道（Meta / GI）
+├── Textures/
+│   ├── cat.png                    # 示例贴图
+│   ├── metal/                     # Metal063 4K PBR 贴图组
+│   │   ├── Metal063_4K-JPG_Color.jpg
+│   │   ├── Metal063_4K-JPG_NormalGL.jpg
+│   │   ├── Metal063_4K-JPG_Metalness.jpg
+│   │   ├── Metal063_4K-JPG_Roughness.jpg
+│   │   └── Metal063_4K-JPG_Displacement.jpg
+│   ├── red_brick/                 # 红砖 4K PBR 贴图组
+│   │   ├── red_brick_diff_4k.jpg
+│   │   ├── red_brick_nor_gl_4k.exr
+│   │   ├── red_brick_rough_4k.exr
+│   │   └── red_brick_disp_4k.png
+│   ├── rusty_metal/               # 锈金属 4K PBR 贴图组
+│   │   ├── rusty_metal_05_diff_4k.jpg
+│   │   ├── rusty_metal_05_nor_gl_4k.exr
+│   │   ├── rusty_metal_05_rough_4k.exr
+│   │   └── rusty_metal_05_disp_4k.png
+│   └── 菴/                         # 额外贴图资源
+└── _lighting/                     # 光照烘焙数据
 ```
 
 ---
@@ -212,8 +220,11 @@ Assets/
 
 | Pass | LightMode | 作用 |
 |------|-----------|------|
-| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 + 附加光源 + 反射探针 + 屏幕空间遮挡 |
+| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 + 附加光源 + 反射探针 + 屏幕空间遮挡 + 烘焙光照贴图 |
 | `ShadowCaster` | `ShadowCaster` | 阴影投射通道，支持带 Alpha 裁切的阴影生成 |
+| `DepthOnly` | `DepthOnly` | 仅深度通道，写入深度缓冲（用于后效深度），支持 Alpha 裁切镂空 |
+| `DepthNormals` | `DepthNormals` | 深度 + 法线通道，输出像素法线用于 SSAO 等后效，支持法线贴图与 Alpha 裁切 |
+| `Meta` | `Meta` | 光照烘焙元通道，向光照烘焙器输出反照率 + 自发光，支持 Alpha 裁切镂空 |
 
 ### Shader Variant 关键字
 
@@ -228,6 +239,7 @@ Assets/
 | `_ALPHA_CUTOUT` | `shader_feature_local` | Alpha 裁切（Cutout 模式） |
 | `_DOUBLE_SIDED_NORMALS` | `shader_feature_local` | 双面法线翻转 |
 | `_ALPHAPREMULTIPLY_ON` | `shader_feature_local_fragment` | 预乘 Alpha 混合（玻璃效果） |
+| `_EMISSION` | `shader_feature_local_fragment` | 自发光参与 GI 烘焙，有自发光贴图或非黑 HDR 色调时启用 |
 
 #### Multi Compile（URP 全局关键字）
 
@@ -242,6 +254,12 @@ Assets/
 | `_REFLECTION_PROBE_BOX_PROJECTION` | `multi_compile_fragment` | 反射探针盒投影 |
 | `_LIGHT_LAYERS` | `multi_compile_fragment` | 光源层级 |
 | `_SCREEN_SPACE_OCCLUSION` | `multi_compile_fragment` | 屏幕空间环境光遮蔽 |
+| `DIRLIGHTMAP_COMBINED` | `multi_compile` | 方向性光照贴图 |
+| `LIGHTMAP_ON` | `multi_compile` | 光照贴图烘焙启用 |
+| `DYNAMICLIGHTMAP_ON` | `multi_compile` | 动态光照贴图 |
+| `LIGHTMAP_SHADOW_MIXING` | `multi_compile` | 光照贴图阴影混合 |
+| `SHADOWS_SHADOWMASK` | `multi_compile` | ShadowMask 纹理 |
+| `_DEBUG_BAKED_GI` | `multi_compile` | 调试：输出烘焙 GI 为灰度 |
 
 ### 程序化点阵镂空算法
 
@@ -317,25 +335,39 @@ normalWS = normalize(normalWS);
 | NoCulling | Off | ❌ |
 | DoubleSided | Off | ✅ |
 
-### 附加光源阴影控制器
+### 光照贴图烘焙
 
-`Assets/Script/AdditionalLightShadowController.cs` 是一个辅助脚本，用于在编辑器中快速配置附加光源的阴影设置：
+Shader 完整支持 URP 光照贴图烘焙流程：
 
-```csharp
-public class AdditionalLightShadowController : MonoBehaviour
-{
-    public bool castShadows = true;           // 是否投射阴影
-    public LightShadows shadowType = LightShadows.Soft; // 阴影类型
-}
-```
-
-- 挂载到带有 `Light` 组件的 GameObject 上
-- 在 Inspector 中修改数值时通过 `OnValidate()` 实时应用
-- 支持 `Soft` / `Hard` / `None` 三种阴影类型
+- **Baked Lightmap**：通过 `OUTPUT_LIGHTMAP_UV` 传递光照贴图 UV，在片元中调用 `SampleLightmap()` 采样烘焙间接光照
+- **SH 兜底**：当对象未被光照贴图覆盖时（如动态对象），自动回退到球谐函数 (`SampleSHVertex` / `SampleSHPixel`) 提供间接光
+- **自发光 GI**：自发光贴图 + HDR 色调通过 `Meta Pass` 输出给光照烘焙器，配合 `_EMISSION` 关键字和 `BakedEmissive` 标记参与全局光照
+- **调试**：`_DEBUG_BAKED_GI` 关键字可输出烘焙 GI 为灰度，方便排查间接光照问题
 
 ---
 
 ## 🔄 Changelog
+
+### — 新增 DepthOnly / DepthNormals / Meta Pass + 光照贴图烘焙支持
+
+**新增 Pass：**
+- 添加 **DepthOnly Pass**：仅深度通道，写入深度缓冲供后效使用，支持 Alpha 裁切镂空
+- 添加 **DepthNormals Pass**：深度 + 法线通道，输出像素法线用于 SSAO 等后效，支持法线贴图与 Alpha 裁切
+- 添加 **Meta Pass**：光照烘焙元通道，向光照烘焙器输出反照率 + 自发光，支持 Alpha 裁切镂空
+
+**光照贴图烘焙：**
+- ForwardLit Pass 新增光照贴图 UV 传递 (`OUTPUT_LIGHTMAP_UV`) 与烘焙 GI 采样 (`SampleLightmap`)
+- 未被光照贴图覆盖时自动回退球谐函数 (`SampleSHVertex` / `SampleSHPixel`) 兜底间接光
+- 自发光参与 GI 烘焙：`_EMISSION` 关键字 + `Material.globalIlluminationFlags = BakedEmissive`
+- 新增 `DIRLIGHTMAP_COMBINED` / `LIGHTMAP_ON` / `DYNAMICLIGHTMAP_ON` / `LIGHTMAP_SHADOW_MIXING` / `SHADOWS_SHADOWMASK` 多编译变体
+- 新增 `_DEBUG_BAKED_GI` 调试关键字，可输出烘焙 GI 为灰度
+
+**其他改动：**
+- 点阵镂空改用视差偏移后的 UV 采样，镂空与视差效果正确叠加
+- 删除 `AdditionalLightShadowController.cs` 脚本（不再需要）
+- Inspector 新增自发光 GI 关键字管理
+
+---
 
 ### — 附加光源 / 反射探针 / 光源层级 / 屏幕空间遮挡 + 阴影控制脚本
 

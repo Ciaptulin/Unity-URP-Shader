@@ -2,7 +2,9 @@
 // "#ifndef MY_LIT_COMMON_INCLUDED" is equivalent to "#if !defined(MY_LIT_COMMON_INCLUDED)"
 #define MY_LIT_COMMON_INCLUDED
 
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl" 
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/UnityInput.hlsl" 
 
 // 用 CBUFFER 包裹材质属性 为了兼容 SRP Batcher（不然动态合批会有问题）
 CBUFFER_START(UnityPerMaterial)

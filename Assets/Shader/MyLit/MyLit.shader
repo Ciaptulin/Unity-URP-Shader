@@ -36,13 +36,18 @@ Shader "Custom/MyLit"
         // [Enum(UnityEngine.Rendering.CullMode)] _Cull("Cull mode", Float) = 2
         // 替换原本的枚举属性，枚举交由代码处理
         [HideInInspector] _Cull("Cull mode", Float) = 2  // 2 is "Back"
-        [HideInInspector] _SourceBlend("Source blend", Float) = 0
+        [HideInInspector] _SourceBlend("Source blend", Float) = 1
         [HideInInspector] _DestBlend("Destination blend", Float) = 0
-        [HideInInspector] _ZWrite("ZWrite", Float) = 0
+        [HideInInspector] _ZWrite("ZWrite", Float) = 1
 
         [HideInInspector] _SurfaceType("Surface type", Float) = 0
         [HideInInspector] _BlendType("Blend type", Float) = 0
         [HideInInspector] _FaceRenderingMode("Face rendering type", Float) = 0
+
+        [HideInInspector][NoScaleOffset] unity_Lightmaps("unity_Lightmaps", 2DArray) = "" {}
+        [HideInInspector][NoScaleOffset] unity_LightmapsInd("unity_LightmapsInd", 2DArray) = "" {}
+        [HideInInspector][NoScaleOffset] unity_ShadowMasks("unity_ShadowMasks", 2DArray) = "" {}
+
 
         
     }
@@ -93,6 +98,19 @@ Shader "Custom/MyLit"
             // 屏幕空间遮挡
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
 
+            // Unity defined keywords - 烘焙光照必须
+            #pragma multi_compile _ DIRLIGHTMAP_COMBINED
+            #pragma multi_compile _ LIGHTMAP_ON
+            #pragma multi_compile _ DYNAMICLIGHTMAP_ON
+            #pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
+            #pragma multi_compile _ SHADOWS_SHADOWMASK
+
+            // 光照探针SH评估  当前没用到
+            // #pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
+
+            // 调试：输出烘焙GI为灰度
+            #pragma multi_compile _ _DEBUG_BAKED_GI
+
 #if UNITY_VERSION >= 202120
             #pragma multi_compile_fragment _ DEBUG_DISPLAY
 #endif
@@ -122,6 +140,63 @@ Shader "Custom/MyLit"
             // Include our code file
             #include "MyLitShadowCasterPass.hlsl"
         ENDHLSL
+        }
+        Pass{
+            Name "Meta"
+            Tags{"LightMode" = "Meta"}
+            Cull Off
+            HLSLPROGRAM
+            #pragma target 2.0
+            #pragma vertex Vertex
+            #pragma fragment Fragment
+            #pragma shader_feature_local_fragment _SPECULAR_SETUP
+            #pragma shader_feature_local_fragment _EMISSION 
+            #pragma shader_feature_local_fragment _ALPHA_CUTOUT
+            #include "MyLitMetaPass.hlsl"
+            ENDHLSL
+        }
+        Pass{
+            Name "DepthOnly"
+            Tags{"LightMode" = "DepthOnly"}
+
+            ZWrite On 
+            ColorMask 0
+            Cull [_Cull]
+
+            HLSLPROGRAM
+            #pragma exclude_renderers gles gles3 glcore 
+            #pragma target 4.5
+
+            #pragma vertex DepthOnlyVertex
+            #pragma fragment DepthOnlyFragment
+
+            // 关键：ShadowCasteer里有，这里也必须同步
+            #pragma shader_feature_local _ALPHA_CUTOUT
+            #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
+
+            #include "MyLitDepthOnlyPass.hlsl"
+            ENDHLSL
+        }
+        Pass{
+            Name "DepthNormals"
+            Tags{"LightMode" = "DepthNormals"}
+
+            ZWrite On
+            Cull [_Cull]
+
+            HLSLPROGRAM
+            #pragma exclude_renderers gles gles3 glcore
+            #pragma target 4.5
+
+            #pragma vertex DepthNormalsVertex
+            #pragma fragment DepthNormalsFragment
+
+            #pragma shader_feature_local _ALPHA_CUTOUT
+            #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
+            #pragma shader_feature_local_fragment _NORMALMAP
+
+            #include "MyLitDepthNormalsPass.hlsl"
+            ENDHLSL
         }
     }
     CustomEditor "MyLitCustomInspector"

@@ -13,6 +13,7 @@ struct Attributes {
     float3 normalOS : NORMAL;
     float4 tangentOS : TANGENT;
     float2 uv : TEXCOORD0; // 材质贴图uv
+    float2 uv2 : TEXCOORD1;  // 光照贴图UV
 };
 
 // 此结构体由顶点函数输出，并作为片段函数的输入
@@ -22,9 +23,11 @@ struct Interpolators {
     // 当从片段函数读取时，它将被转换为当前片段在屏幕上的像素位置
     float4 positionCS : SV_POSITION;
     float2 uv : TEXCOORD0;
-    float3 positionWS : TEXCOORD1;
-    float3 normalWS : TEXCOORD2;
-    float4 tangentWS : TEXCOORD3;
+    float2 uv2 : TEXCOORD1;
+    float3 positionWS : TEXCOORD2;
+    float3 normalWS : TEXCOORD3;
+    float4 tangentWS : TEXCOORD4;
+    half vertexSH : TEXCOORD5;  // 无光照时采用球谐函数兜底
 
 };
 
@@ -58,9 +61,15 @@ Interpolators Vertex(Attributes input) {
     output.positionCS = posnInputs.positionCS;
     // 顶点函数里使用采样器采样uv
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
+    // output.uv2 = input.uv2; // 传递光照贴图UV
+    // 宏定义在 Lighting.hlsl 里
+    OUTPUT_LIGHTMAP_UV(input.uv2, unity_LightmapST, output.uv2);
     output.normalWS = normInput.normalWS;
     output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
     output.positionWS = posnInputs.positionWS;
+
+    // 修复：没有LIGHTMAP_ON时（光照探针/lightmap被剥离）靠SH提供间接光
+    output.vertexSH = SampleSHVertex(normInput.normalWS);
 
     return output;
 }
@@ -98,6 +107,12 @@ float4 Fragment(Interpolators input
     float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv) * _ColorTint;
     // 括号内的值小于0，直接把这个像素丢弃
     // clip(colorSample.a * _ColorTint.a - 0.5);
+    
+    // -------程序化点阵镂空-------
+    // input.uv（原始 UV）-> 改用偏移后的 uv，即input.uv 改为 uv
+    colorSample.a = CalculateDotMatrix(uv, _DotDensity, _DotRadius, 
+                                        float2(_DotScaleX, _DotScaleY));
+
     TestAlphaClip(colorSample);
 
 // 这里一直在写宏，看上去像是在优化性能
@@ -128,10 +143,23 @@ float4 Fragment(Interpolators input
     lightingInput.tangentToWorld = tangentToWorld; // 提供转换矩阵
 #endif
 
-    // -------程序化点阵镂空-------
-    colorSample.a = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius, float2(_DotScaleX, _DotScaleY));
+// 修复：原来无条件调用SampleLightmap，它在LIGHTMAP_ON未定义时直接返回0
+// 导致使用光照探针的对象整体变黑，这里补了SH兜底
+#ifdef LIGHTMAP_ON
+    // 光照贴图采样
+    lightingInput.bakedGI = SampleLightmap(input.uv2, normalWS);
+#else
+    lightingInput.bakedGI = SampleSHPixel(input.vertexSH, normalWS);
+#endif
+
+    // 调试：输出烘焙GI为灰度
+    #ifdef _DEBUG_BAKED_GI
+        return float4(lightingInput.bakedGI, 1);
+    #endif
 
     SurfaceData surfaceInput = (SurfaceData)0;
+    // 如果以后想做AO，就采样一张Occlusion贴图，URP惯例用g通道
+    surfaceInput.occlusion = 1.0;
     surfaceInput.albedo = colorSample.rgb; //  * _ColorTint.rgb; // 98行已经乘过了
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
     #ifdef _SPECULAR_SETUP

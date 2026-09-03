@@ -226,5 +226,16 @@ public class MyLitCustomInspector : ShaderGUI
         {
             material.DisableKeyword("_DOUBLE_SIDED_NORMALS");
         }
+        // 新增自发光GI
+        // _EMISSION是shader_feature_local_fragment,没有人Enable就永远走不到自发光变体
+        // globalIlluminationFlags不设置的话，自发光也不会参与光照烘焙
+        bool hasEmission = material.GetTexture("_EmissionMap") != null
+                        || material.GetColor("_EmissionTint") != Color.black;
+
+        CoreUtils.SetKeyword(material, "_EMISSION", hasEmission);
+
+        material.globalIlluminationFlags = hasEmission
+            ? MaterialGlobalIlluminationFlags.BakedEmissive
+            : MaterialGlobalIlluminationFlags.EmissiveIsBlack;
     }
 }
