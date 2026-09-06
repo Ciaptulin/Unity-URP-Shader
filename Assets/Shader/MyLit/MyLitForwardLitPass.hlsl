@@ -182,6 +182,7 @@ float4 Fragment(Interpolators input
     // surfaceInput.metallic = _Metalness;  // 这个值已经在采样时乘过去了，不需要再单独赋值了
     // surfaceInput.smoothness = _Smoothness; // 同上
     surfaceInput.emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, uv).rgb * _EmissionTint;
+    surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
 #ifdef _CLEARCOATMAP
     surfaceInput.clearCoatMask = SAMPLE_TEXTURE2D(_ClearCoatMask, sampler_ClearCoatMask, uv).r * _ClearCoatStrength;
     surfaceInput.clearCoatSmoothness = SAMPLE_TEXTURE2D(_ClearCoatSmoothnessMask, sampler_ClearCoatSmoothnessMask, uv).r * _ClearCoatSmoothness;

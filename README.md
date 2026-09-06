@@ -21,6 +21,7 @@
 - **自发光贴图**：支持 HDR 自发光色调，可驱动后处理 Bloom
 - **视差贴图（Parallax Mapping）**：基于高度图的 UV 偏移采样，增加表面深度感
 - **清漆效果（Clear Coat）**：支持清漆遮罩 + 强度 + 光滑度，模拟车漆/漆面多层反射
+- **遮挡贴图（Occlusion Map）**：支持环境光遮蔽贴图（G 通道），可调节遮蔽强度，增强接触阴影和凹陷处的真实感
 - **程序化点阵镂空**：通过数学计算在片元着色器中生成圆形点阵，实现半色调（halftone）镂空效果
 - **多种表面类型**：
   - `Opaque` — 不透明
@@ -58,6 +59,8 @@
 
 ```
 Assets/
+├── Docs/                          # 教程文档
+│   └── Unity着色器教程/            # Unity 着色器教程（Part1-Part9 + 示例）
 ├── Editor/
 │   └── MyLitCustomInspector.cs    # 自定义材质编辑器
 ├── Material/
@@ -127,6 +130,7 @@ Assets/
    - **Height/displacement map** → 视差高度图
    - **Clear coat mask** → 清漆遮罩纹理
    - **Clear coat smoothness mask** → 清漆光滑度遮罩纹理
+   - **Occlusion** → 环境光遮蔽贴图（G 通道）
 5. **调整参数**：
    - **Normal strength** — 控制法线凹凸程度
    - **Metalness** — 全局金属度系数
@@ -136,6 +140,7 @@ Assets/
    - **Parallax strength** — 视差偏移强度
    - **Clear coat strength** — 清漆强度
    - **Clear coat smoothness** — 清漆光滑度
+   - **Occlusion strength** — 环境光遮蔽强度
 6. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
 
 ---
@@ -202,6 +207,13 @@ Assets/
 | `Clear coat smoothness mask` | 2D 贴图 | 清漆光滑度遮罩纹理 |
 | `Clear coat smoothness` | Range(0, 1) | 清漆光滑度系数 |
 
+### 环境光遮蔽
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `Occlusion` | 2D 贴图 | 环境光遮蔽贴图（G 通道控制遮蔽强度） |
+| `Occlusion strength` | Range(0, 1) | 遮蔽强度系数，0 = 无遮蔽，1 = 完全遮蔽 |
+
 ### 点阵镂空
 
 | 参数 | 类型 | 说明 |
@@ -220,7 +232,7 @@ Assets/
 
 | Pass | LightMode | 作用 |
 |------|-----------|------|
-| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 点阵镂空 + Alpha 裁切 + 附加光源 + 反射探针 + 屏幕空间遮挡 + 烘焙光照贴图 |
+| `ForwardLit` | `UniversalForward` | 主前向光照通道，计算 PBR 光照 + 法线贴图 + 视差 + 清漆 + 遮挡贴图 + 点阵镂空 + Alpha 裁切 + 附加光源 + 反射探针 + 屏幕空间遮挡 + 烘焙光照贴图 |
 | `ShadowCaster` | `ShadowCaster` | 阴影投射通道，支持带 Alpha 裁切的阴影生成 |
 | `DepthOnly` | `DepthOnly` | 仅深度通道，写入深度缓冲（用于后效深度），支持 Alpha 裁切镂空 |
 | `DepthNormals` | `DepthNormals` | 深度 + 法线通道，输出像素法线用于 SSAO 等后效，支持法线贴图与 Alpha 裁切 |
@@ -344,9 +356,33 @@ Shader 完整支持 URP 光照贴图烘焙流程：
 - **自发光 GI**：自发光贴图 + HDR 色调通过 `Meta Pass` 输出给光照烘焙器，配合 `_EMISSION` 关键字和 `BakedEmissive` 标记参与全局光照
 - **调试**：`_DEBUG_BAKED_GI` 关键字可输出烘焙 GI 为灰度，方便排查间接光照问题
 
+### 遮挡贴图（Occlusion Map）
+
+遮挡贴图用于模拟物体表面凹陷处的环境光遮蔽效果，增强接触阴影和细节处的真实感：
+
+- **采样**：从 `_OcclusionMap` 的 G 通道读取遮蔽值（符合 URP 惯例）
+- **强度控制**：`_OcclusionStrength` 系数调节遮蔽程度，0 = 无遮蔽，1 = 完全遮蔽
+- **应用**：直接赋值给 `surfaceInput.occlusion`，由 `UniversalFragmentPBR` 参与光照计算
+
+```hlsl
+surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
+```
+
 ---
 
 ## 🔄 Changelog
+
+### — 遮挡贴图支持 + 教程文档
+
+**新增功能：**
+- 添加 **遮挡贴图（Occlusion Map）**：采样 G 通道遮蔽值，支持 `_OcclusionStrength` 强度调节，增强接触阴影真实感
+- 新增 `Docs/Unity着色器教程/` 目录：包含 Part1-Part9 着色器教程 + URP 反射探针与 PBR 反射示例
+
+**其他改动：**
+- `AdditionalLightShadowController.cs` 日志改进：`Debug.LogError` 增加 `this` 上下文参数
+- SampleScene 场景调整：相机/光源位置、光照贴图设置、静态标记
+
+---
 
 ### — 新增 DepthOnly / DepthNormals / Meta Pass + 光照贴图烘焙支持
 

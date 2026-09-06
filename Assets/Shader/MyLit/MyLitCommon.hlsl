@@ -19,7 +19,7 @@ float3 _EmissionTint;
 float _ParallaxStrength;
 float _ClearCoatStrength;
 float _ClearCoatSmoothness;
-
+float _OcclusionStrength;
 // 程序化生成镂空材质
 float _DotDensity; // 点的密度（比如 10.0）
 float _DotRadius;  // 点的半径（比如 0.3）
@@ -36,6 +36,8 @@ TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
 TEXTURE2D(_ParallaxMap); SAMPLER(sampler_ParallaxMap);
 TEXTURE2D(_ClearCoatMask); SAMPLER(sampler_ClearCoatMask);
 TEXTURE2D(_ClearCoatSmoothnessMask); SAMPLER(sampler_ClearCoatSmoothnessMask);
+TEXTURE2D(_OcclusionMap); SAMPLER(sampler_OcclusionMap);
+
 
 void TestAlphaClip(float4 colorSample) {
 #ifdef _ALPHA_CUTOUT

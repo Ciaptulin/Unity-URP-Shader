@@ -16,7 +16,7 @@ public class AdditionalLightShadowController : MonoBehaviour
 
         if (targetLight == null)
         {
-            Debug.LogError("当前GameObject上没有Light组件");
+            Debug.LogError($"[{gameObject.name}] 上没有 Light 组件", this);
             return;
         }
 

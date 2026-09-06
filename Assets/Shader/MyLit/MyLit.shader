@@ -32,6 +32,11 @@ Shader "Custom/MyLit"
         _DotScaleX("Dot Scale X", Range(0.1, 5)) = 1
         _DotScaleY("Dot Scale Y", Range(0.1, 5)) = 1
 
+        // 遮挡贴图
+        [Header(Occlusion)]
+        [NoScaleOffset] _OcclusionMap("Occlusion", 2D) = "white" {}
+        _OcclusionStrength("Occlusion strength", Range(0,1)) = 1
+
 
         // [Enum(UnityEngine.Rendering.CullMode)] _Cull("Cull mode", Float) = 2
         // 替换原本的枚举属性，枚举交由代码处理
