@@ -254,6 +254,93 @@ float  _WindSpeed;
 
 ---
 
+### 3.5 完整实现代码
+
+以下是项目中的完整实现代码（`MyLitAnimation.hlsl`），包含权重计算、风偏移、法线修正：
+
+```hlsl
+#ifndef MY_LIT_ANIMATION_INCLUDED
+#define MY_LIT_ANIMATION_INCLUDED
+
+// Part 8：顶点动画公共文件。
+// 关键点：所有 Pass（ForwardLit / ShadowCaster / DepthOnly / DepthNormals）都 include 它，
+// 保证影子、深度、SSAO 法线与画面里的模型动得一模一样。
+
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+// 全局风场参数，由 Assets/Scripts/WindController.cs 通过 Shader.SetGlobal* 设置
+// 注意：全局属性不能放进 UnityPerMaterial（那是每材质的数据）
+float4 _WindData;        // xyz = 方向 * 强度, w = 整体强度
+float  _WindSpeed;
+float  _WindTurbulence;  // 湍流：让相邻位置产生相位差
+float  _WindHeight;      // 没有顶点色时的兜底高度
+
+// 权重：优先用顶点色 R 通道（美术刷的），没有则用高度
+float MyLitWindWeight(float4 vertexColor, float3 positionOS)
+{
+    float weight = vertexColor.r;
+    if (weight < 0.001)
+        weight = pow(saturate(positionOS.y / max(_WindHeight, 0.001)), 2.0);
+    return weight;
+}
+
+// 单个顶点的风偏移量（世界空间）
+float3 MyLitWindOffset(float3 positionWS, float weight, float time)
+{
+    // 加一点极小值，避免 _WindData.xz 为 0 时 normalize 出 NaN
+    float2 windDir = normalize(_WindData.xz + float2(1e-4, 1e-4));
+
+    // 相位里带上世界位置：让一片草随风形成"波浪"，而不是整体同步平移
+    float phase = dot(positionWS.xz, windDir) * _WindTurbulence;
+
+    // ① 主干摆动：低频、大幅。两个非整数倍频率叠加，避免出现明显循环
+    float sway  = sin(time * _WindSpeed * 0.5 + phase);
+    sway       += sin(time * _WindSpeed * 0.31 + phase * 1.3) * 0.5;
+    sway       /= 1.5;
+
+    float3 offset = float3(windDir.x, 0, windDir.y) * sway * weight;
+
+    // ② 细节抖动：高频、小幅
+    offset.y += sin(time * _WindSpeed * 2.0 + phase) * weight * 0.05;
+
+    return offset * _WindData.w;
+}
+
+// 只改位置（DepthOnly 这类不需要法线的 Pass 用这个）
+float3 MyLitApplyWind(float3 positionOS, float4 vertexColor, float time)
+{
+    float weight = MyLitWindWeight(vertexColor, positionOS);
+
+    // 风的相位要用世界坐标算，所以先转到世界空间再转回来
+    float3 positionWS = TransformObjectToWorld(positionOS);
+    positionWS += MyLitWindOffset(positionWS, weight, time);
+    return TransformWorldToObject(positionWS);
+}
+
+// 同时修正法线：位移改变了表面朝向，不重算光照就会"不跟着动"
+void MyLitApplyWindWithNormal(inout float3 positionOS, inout float3 normalOS,
+                              float4 vertexColor, float time)
+{
+    // 以原法线构造一组正交基
+    float3 up = abs(normalOS.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 tangent   = normalize(cross(normalOS, up));
+    float3 bitangent = cross(normalOS, tangent);   // 保证 cross(tangent, bitangent) = normalOS
+
+    const float eps = 0.02;   // 对象空间步长，太大法线会糊，太小会抖
+
+    float3 p0 = MyLitApplyWind(positionOS, vertexColor, time);
+    float3 p1 = MyLitApplyWind(positionOS + tangent   * eps, vertexColor, time);
+    float3 p2 = MyLitApplyWind(positionOS + bitangent * eps, vertexColor, time);
+
+    positionOS = p0;
+    normalOS   = normalize(cross(p1 - p0, p2 - p0));
+}
+
+#endif
+```
+
+---
+
 ## 4. 🟩 纹理驱动的位移
 
 ### 4.1 顶点阶段采样纹理

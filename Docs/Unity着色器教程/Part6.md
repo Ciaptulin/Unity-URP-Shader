@@ -328,6 +328,159 @@ Shader "Hidden/MyFullScreen"
 }
 ```
 
+以下是项目中的完整实现代码：
+
+```csharp
+using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+
+/// <summary>
+/// Part 6 示例：一个最小可用的全屏 Renderer Feature。
+/// 用法：Renderer Data → Add Renderer Feature → 选 Custom Full Screen Feature → 拖入使用
+/// Hidden/CustomFullScreen 的材质。
+/// </summary>
+public class CustomFullScreenFeature : ScriptableRendererFeature
+{
+    [System.Serializable]
+    public class Settings
+    {
+        public RenderPassEvent passEvent = RenderPassEvent.BeforeRenderingPostProcessing;
+        public Material material;
+        [Range(0f, 2f)] public float intensity = 1.0f;
+    }
+
+    public Settings settings = new Settings();
+
+    private CustomFullScreenPass m_Pass;
+
+    // 只调用一次：创建 Pass 实例
+    public override void Create()
+    {
+        m_Pass = new CustomFullScreenPass(settings);
+        m_Pass.renderPassEvent = settings.passEvent;
+    }
+
+    // 每帧调用：决定要不要把这个 Pass 排进队列
+    public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
+    {
+        if (settings.material == null)
+            return;
+
+        // 场景视图小窗、材质预览等都不需要处理
+        if (renderingData.cameraData.isPreviewCamera)
+            return;
+
+        m_Pass.Setup(renderer);
+        renderer.EnqueuePass(m_Pass);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        m_Pass?.Cleanup();
+    }
+
+    // ---------------- Pass ----------------
+    private class CustomFullScreenPass : ScriptableRenderPass
+    {
+        private readonly Settings m_Settings;
+        private readonly ProfilingSampler m_Profiler = new ProfilingSampler("Custom Full Screen");
+        private static readonly int IntensityID = Shader.PropertyToID("_Intensity");
+
+        private RTHandle m_Source;
+        private RTHandle m_Temp;
+
+        public CustomFullScreenPass(Settings settings)
+        {
+            m_Settings = settings;
+        }
+
+        // 在 Execute 之前拿不到相机颜色目标，所以放在这里取
+        public void Setup(ScriptableRenderer renderer)
+        {
+            m_Source = renderer.cameraColorTargetHandle;
+        }
+
+        // 分配临时 RT；只在尺寸/格式变化时真正重新分配
+        public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
+        {
+            RenderTextureDescriptor desc = renderingData.cameraData.cameraTargetDescriptor;
+            desc.depthBufferBits = 0;   // 全屏 Pass 不需要深度缓冲
+
+            RenderingUtils.ReAllocateIfNeeded(
+                ref m_Temp, desc, filterMode: FilterMode.Bilinear, name: "_CustomFullScreenTemp");
+        }
+
+        public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+        {
+            if (m_Settings.material == null)
+                return;
+
+            CommandBuffer cmd = CommandBufferPool.Get();
+            using (new ProfilingScope(cmd, m_Profiler))
+            {
+                m_Settings.material.SetFloat(IntensityID, m_Settings.intensity);
+
+                // 源和目标不能是同一个 RT，必须经临时 RT 中转
+                Blitter.BlitCameraTexture(cmd, m_Source, m_Temp, m_Settings.material, 0);
+                Blitter.BlitCameraTexture(cmd, m_Temp, m_Source, 0);
+            }
+
+            context.ExecuteCommandBuffer(cmd);
+            CommandBufferPool.Release(cmd);
+        }
+
+        public void Cleanup()
+        {
+            m_Temp?.Release();
+        }
+    }
+}
+```
+
+```hlsl
+Shader "Hidden/CustomFullScreen"
+{
+    SubShader
+    {
+        Tags { "RenderPipeline" = "UniversalPipeline" }
+
+        Pass
+        {
+            Name "CustomFullScreen"
+
+            // 全屏 Pass 三件套：不写深度、不做深度测试、不剔面
+            ZWrite Off
+            ZTest Always
+            Cull Off
+
+            HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment Frag
+
+            // Core.hlsl 提供 XR 相关依赖；Blit.hlsl 提供 Varyings / Vert / _BlitTexture / FragBlit
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
+
+            float  _Intensity;
+            float4 _Tint;
+
+            float4 Frag(Varyings input) : SV_Target
+            {
+                // FragBlit 是 Blit.hlsl 提供的辅助函数，内部处理了 XR / 数组纹理的差异
+                float4 color = FragBlit(input, sampler_LinearClamp);
+
+                color.rgb *= _Intensity;
+                color.rgb = lerp(color.rgb, color.rgb * _Tint.rgb, _Tint.a);
+
+                return color;
+            }
+            ENDHLSL
+        }
+    }
+}
+```
+
 ### 4.3 插入点怎么选
 
 | RenderPassEvent | 时机 | 典型用途 |

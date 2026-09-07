@@ -196,6 +196,134 @@ for (uint i = 0u; i < lightCount; i++)
 }
 
 return half4(color, surfaceInput.alpha);
+}
+```
+
+以下是项目中的完整实现代码（`MyLitCustomBRDF.hlsl`）：
+
+```hlsl
+#ifndef MY_LIT_CUSTOM_BRDF_INCLUDED
+#define MY_LIT_CUSTOM_BRDF_INCLUDED
+
+// 本文件由 MyLitForwardLitPass.hlsl 在 _CUSTOM_BRDF 关键字下使用。
+// 依赖 URP 的 InputData / SurfaceData / Light / BRDFData，这里显式引入保证自洽（都有 include 守卫）。
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/AmbientOcclusion.hlsl"
+
+// ─────────────────────────────────────────────────────────────
+// D：GGX 法线分布函数
+//     alpha2 = (perceptualRoughness²)²，与 URP 的 roughness2 对齐
+// ─────────────────────────────────────────────────────────────
+half CustomD_GGX(half NdotH, half alpha2)
+{
+    half d = NdotH * NdotH * (alpha2 - 1.0) + 1.00001;
+    return alpha2 / (PI * d * d);
+}
+
+// ─────────────────────────────────────────────────────────────
+// F：Schlick 菲涅尔近似
+// ─────────────────────────────────────────────────────────────
+half3 CustomF_Schlick(half3 f0, half VdotH)
+{
+    half f  = saturate(1.0 - VdotH);
+    half f5 = f * f * f * f * f;               // pow(1 - VdotH, 5)
+    return f0 + (1.0 - f0) * f5;
+}
+
+// ─────────────────────────────────────────────────────────────
+// V：Smith height-correlated visibility
+//     ⚠️ 它已经包含 1 / (4 * NdotL * NdotV)，调用处不要再除一次！
+// ─────────────────────────────────────────────────────────────
+half CustomV_SmithGGX(half NdotL, half NdotV, half alpha2)
+{
+    half lambdaV = NdotL * sqrt(NdotV * NdotV * (1.0 - alpha2) + alpha2);
+    half lambdaL = NdotV * sqrt(NdotL * NdotL * (1.0 - alpha2) + alpha2);
+    return 0.5 / max(lambdaV + lambdaL, 1e-5);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 单个光源的直接光：diffuse + specular
+//   注意：URP 内置 Lit 的漫反射不除 π（灯光单位约定不同），这里跟随 URP
+//   以便切换关键字时亮度可直接对比。若要以辐射亮度为单位做严格物理，
+//   给 diffuse 乘上 INV_PI 即可。
+// ─────────────────────────────────────────────────────────────
+half3 CustomDirectBRDF(half3 diffuseColor, half3 F0, half alpha2,
+                       half3 normalWS, half3 viewDirWS, Light light)
+{
+    half3 halfVec = normalize(light.direction + viewDirWS);
+
+    half NdotL = saturate(dot(normalWS, light.direction));
+    half NdotV = max(dot(normalWS, viewDirWS), 1e-4);
+    half NdotH = saturate(dot(normalWS, halfVec));
+    half VdotH = saturate(dot(viewDirWS, halfVec));
+
+    half3 F = CustomF_Schlick(F0, VdotH);
+    half  D = CustomD_GGX(NdotH, alpha2);
+    half  V = CustomV_SmithGGX(NdotL, NdotV, alpha2);
+
+    half3 specular = D * V * F;                // V 已含 1/(4*NdotL*NdotV)
+    half3 diffuse  = diffuseColor * (1.0 - F); // 能量守恒：被反射走的那部分不再漫反射
+
+    half3 radiance = light.color * (light.distanceAttenuation * light.shadowAttenuation);
+    return (diffuse + specular) * radiance * NdotL;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 自定义光照入口：替换 UniversalFragmentPBR
+//   环境部分完全复用 URP（反射探针/盒投影/混合/GI/环境 BRDF 都不重写），
+//   只把"直接光怎么算"换成上面的 D·F·V。
+// ─────────────────────────────────────────────────────────────
+half4 CustomLighting(InputData inputData, SurfaceData surfaceData)
+{
+    half3 normalWS  = inputData.normalWS;
+    half3 viewDirWS = inputData.viewDirectionWS;
+
+    half perceptualRoughness = 1.0 - surfaceData.smoothness;
+    half alpha  = max(perceptualRoughness * perceptualRoughness, 0.002);
+    half alpha2 = alpha * alpha;
+
+    half3 F0           = lerp((half3)0.04, surfaceData.albedo, surfaceData.metallic);
+    half3 diffuseColor = surfaceData.albedo * (1.0 - surfaceData.metallic);
+
+    half4 shadowMask = CalculateShadowMask(inputData);
+    AmbientOcclusionFactor aoFactor = CreateAmbientOcclusionFactor(inputData, surfaceData);
+
+    // ── 直接光：主光 + 附加光 ──
+    half3 color = 0;
+
+    Light mainLight = GetMainLight(inputData, shadowMask, aoFactor);
+    color += CustomDirectBRDF(diffuseColor, F0, alpha2, normalWS, viewDirWS, mainLight);
+
+    uint additionalLightCount = GetAdditionalLightsCount();
+    for (uint i = 0u; i < additionalLightCount; i++)
+    {
+        Light light = GetAdditionalLight(i, inputData, shadowMask, aoFactor);
+        color += CustomDirectBRDF(diffuseColor, F0, alpha2, normalWS, viewDirWS, light);
+    }
+
+    // ── 环境光：复用 URP 的 BRDFData 与环境 BRDF ──
+    BRDFData brdfData;
+    InitializeBRDFData(surfaceData, brdfData);
+
+    half3 reflectVector = reflect(-viewDirWS, normalWS);
+    half3 indirectSpecular = GlossyEnvironmentReflection(
+        reflectVector,
+        inputData.positionWS,                  // 盒投影需要它
+        perceptualRoughness,
+        surfaceData.occlusion,
+        inputData.normalizedScreenSpaceUV);
+
+    half NoV = saturate(dot(normalWS, viewDirWS));
+    half fresnelTerm = Pow4(1.0 - NoV);
+    half3 environment = EnvironmentBRDF(brdfData, inputData.bakedGI, indirectSpecular, fresnelTerm);
+
+    color += environment * aoFactor.indirectAmbientOcclusion;
+    color += surfaceData.emission;
+
+    return half4(color, surfaceData.alpha);
+}
+
+#endif
 ```
 
 > `brdfData` 通过 `InitializeBRDFData(surfaceInput, brdfData)` 得到，`INV_PI` / `PI` / `Pow4` 都在 URP 的 `Common.hlsl` / `BRDF.hlsl` 里。

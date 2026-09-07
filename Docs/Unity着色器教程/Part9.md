@@ -118,6 +118,81 @@ float _Weights[3];     // 注意：数组不能放进 UnityPerMaterial CBUFFER �
 
 > 💡 CBUFFER 里的数组/结构体在跨平台对齐上容易出问题，且 SRP Batcher 要求 `UnityPerMaterial` 的布局固定。批量数据（>4 个值）更稳妥的做法是 `SetGlobalVector` 或 `ComputeBuffer`（HLSL 侧对应 `StructuredBuffer`）。
 
+以下是完整实现代码（`ShaderPropertyController.cs`）：
+
+```csharp
+using UnityEngine;
+
+/// <summary>
+/// Part 9：最基础的材质属性控制。
+/// 演示：属性 ID 缓存、material 实例的正确取得与释放、避免每帧无意义写入。
+/// </summary>
+public class ShaderPropertyController : MonoBehaviour
+{
+    [Header("Target")]
+    public Renderer targetRenderer;
+
+    [Header("Animate")]
+    public bool animateSmoothness = true;
+    public float speed = 1f;
+
+    // 字符串查找有开销，热路径一律先转 ID 并缓存
+    private static readonly int SmoothnessID = Shader.PropertyToID("_Smoothness");
+    private static readonly int ColorTintID  = Shader.PropertyToID("_ColorTint");
+
+    private Material m_MaterialInstance;
+    private float m_LastWritten = float.MinValue;
+
+    private void Awake()
+    {
+        if (targetRenderer == null)
+            targetRenderer = GetComponent<Renderer>();
+
+        // renderer.material 会在首次访问时创建一份实例（之后复用同一份）
+        // 只在 Awake 里取一次并缓存引用，别放进 Update
+        m_MaterialInstance = targetRenderer.material;
+    }
+
+    private void Update()
+    {
+        if (!animateSmoothness)
+            return;
+
+        float value = Mathf.PingPong(Time.time * speed, 1f);
+
+        // 只在真的变化时才写，省掉无意义的 CPU→GPU 传输
+        if (Mathf.Abs(value - m_LastWritten) < 0.001f)
+            return;
+
+        m_MaterialInstance.SetFloat(SmoothnessID, value);
+        m_LastWritten = value;
+    }
+
+    // 材质实例是运行时 new 出来的，不在 Assets 里，切场景不会自动回收，必须手动释放
+    private void OnDestroy()
+    {
+        if (m_MaterialInstance != null)
+            Destroy(m_MaterialInstance);
+    }
+
+    [ContextMenu("改成红色（用 material 实例，只影响自己）")]
+    private void SetRed()
+    {
+        m_MaterialInstance.SetColor(ColorTintID, Color.red);
+    }
+
+    [ContextMenu("打印所有属性名")]
+    private void PrintProperties()
+    {
+        Shader shader = m_MaterialInstance.shader;
+        for (int i = 0; i < shader.GetPropertyCount(); i++)
+        {
+            Debug.Log($"[{i}] {shader.GetPropertyName(i)} : {shader.GetPropertyType(i)}");
+        }
+    }
+}
+```
+
 ---
 
 ## 2. 🟦 MaterialPropertyBlock
@@ -181,6 +256,81 @@ UNITY_INSTANCING_BUFFER_END(UnityPerMaterial)
 配合 `UNITY_SETUP_INSTANCE_ID(input)` / `UNITY_ACCESS_INSTANCED_PROP`。
 
 > 📌 **项目现状**：`MyLit` 目前用的是普通 CBUFFER（为 SRP Batcher 优化），**没有**实例化缓冲声明。这意味着当前的定位是 **SRP Batcher 优先**。如果某天需要"几千个同材质不同色的物体"，就要把那条属性改成实例化版本并接受放弃 SRP Batcher——**两者二选一，要按场景决定**。
+
+以下是完整实现代码（`MaterialPropertyBlockController.cs`）：
+
+```csharp
+using UnityEngine;
+using System.Collections.Generic;
+
+/// <summary>
+/// Part 9：MaterialPropertyBlock（MPB）。
+/// 适合"大量物体共用一个材质、但每个个体参数不同"的场景。
+///
+/// ⚠️ 两点必须知道：
+///   1. MPB 与 SRP Batcher 不兼容（Unity 官方说明），但支持 GPU Instancing；
+///   2. MPB 不能切关键字、不能改纹理的 Tiling/Offset。
+/// </summary>
+public class MaterialPropertyBlockController : MonoBehaviour
+{
+    [Header("Setup")]
+    public int instanceCount = 200;
+    public GameObject prefab;
+    public Vector3 areaSize = new Vector3(20f, 0f, 20f);
+
+    private static readonly int ColorTintID = Shader.PropertyToID("_ColorTint");
+
+    private readonly List<Renderer> m_Renderers = new List<Renderer>();
+    private readonly List<MaterialPropertyBlock> m_Blocks = new List<MaterialPropertyBlock>();
+
+    private void Start()
+    {
+        if (prefab == null)
+            return;
+
+        for (int i = 0; i < instanceCount; i++)
+        {
+            Vector3 pos = new Vector3(
+                Random.Range(-areaSize.x * 0.5f, areaSize.x * 0.5f),
+                0f,
+                Random.Range(-areaSize.z * 0.5f, areaSize.z * 0.5f));
+
+            GameObject go  = Instantiate(prefab, pos, Quaternion.identity, transform);
+            Renderer rend  = go.GetComponent<Renderer>();
+            if (rend == null)
+                continue;
+
+            // 一个物体一个 block，之后复用它，别每帧 new
+            var block = new MaterialPropertyBlock();
+            block.SetColor(ColorTintID, Random.ColorHSV(0f, 1f, 0.6f, 1f, 0.6f, 1f));
+            rend.SetPropertyBlock(block);
+
+            m_Renderers.Add(rend);
+            m_Blocks.Add(block);
+        }
+    }
+
+    private void Update()
+    {
+        for (int i = 0; i < m_Renderers.Count; i++)
+        {
+            float hue = (i * 0.01f + Time.time * 0.05f) % 1f;
+
+            // 先取回来再改，避免覆盖掉 block 里已有的其它属性
+            m_Renderers[i].GetPropertyBlock(m_Blocks[i]);
+            m_Blocks[i].SetColor(ColorTintID, Color.HSVToRGB(hue, 0.8f, 1f));
+            m_Renderers[i].SetPropertyBlock(m_Blocks[i]);
+        }
+    }
+
+    [ContextMenu("清除所有 MPB 覆盖")]
+    private void ClearBlocks()
+    {
+        foreach (var rend in m_Renderers)
+            rend.SetPropertyBlock(null);   // 传 null 即恢复材质默认值
+    }
+}
+```
 
 ---
 
@@ -265,6 +415,85 @@ IEnumerator Start()
 }
 ```
 
+以下是完整实现代码（`ShaderKeywordController.cs`）：
+
+```csharp
+using UnityEngine;
+using UnityEngine.Rendering;
+
+/// <summary>
+/// Part 9：着色器关键字控制（材质级 + 全局级）。
+/// 演示 2021.2+ 推荐的 LocalKeyword / GlobalKeyword 结构体写法（避免字符串查找）。
+/// </summary>
+public class ShaderKeywordController : MonoBehaviour
+{
+    [Header("Target")]
+    public Material material;
+
+    [Header("Material Keyword")]
+    public string keywordName = "_CUSTOM_BRDF";
+
+    [Header("Global Keyword")]
+    public string globalKeywordName = "_MY_GLOBAL_FEATURE";
+
+    private LocalKeyword m_LocalKeyword;
+    private GlobalKeyword m_GlobalKeyword;
+    private bool m_Valid;
+
+    private void Awake()
+    {
+        if (material == null)
+        {
+            var rend = GetComponent<Renderer>();
+            if (rend != null)
+                material = rend.material;
+        }
+
+        if (material == null)
+            return;
+
+        // 关键字必须在 shader 的 keywordSpace 里存在，否则这个构造会给出无效关键字
+        m_LocalKeyword = new LocalKeyword(material.shader.keywordSpace, keywordName);
+        m_Valid = m_LocalKeyword.isValid;
+
+        if (!m_Valid)
+            Debug.LogWarning($"关键字 [{keywordName}] 不在 shader 的 keywordSpace 里，切换不会生效", this);
+
+        m_GlobalKeyword = GlobalKeyword.Create(globalKeywordName);
+    }
+
+    [ContextMenu("切换材质关键字")]
+    private void ToggleMaterialKeyword()
+    {
+        if (!m_Valid)
+            return;
+
+        bool current = material.IsKeywordEnabled(m_LocalKeyword);
+        material.SetKeyword(m_LocalKeyword, !current);
+        Debug.Log($"[{keywordName}] -> {!current}");
+    }
+
+    [ContextMenu("打开全局关键字")]
+    private void EnableGlobal()   => Shader.EnableKeyword(m_GlobalKeyword);
+
+    [ContextMenu("关闭全局关键字")]
+    private void DisableGlobal()  => Shader.DisableKeyword(m_GlobalKeyword);
+
+    [ContextMenu("打印当前启用的关键字")]
+    private void PrintEnabledKeywords()
+    {
+        foreach (var kw in material.enabledKeywords)
+            Debug.Log($"启用中：{kw.name}");
+    }
+
+    private void OnDestroy()
+    {
+        if (material != null)
+            Destroy(material);
+    }
+}
+```
+
 ---
 
 ## 4. 🟦 全局着色器属性
@@ -286,6 +515,50 @@ float  _GlobalTime;
 ```
 
 > ⚠️ 全局属性命名一定要加前缀（`_MyGame_XXX`）。它对**所有**着色器可见，重名会互相覆盖，而且不报错。
+
+以下是完整实现代码（`GlobalPropertiesController.cs`）：
+
+```csharp
+using UnityEngine;
+
+/// <summary>
+/// Part 9：全局着色器属性。一次设置，全场所有材质都能读到。
+/// 适合时间、天气、雾、风这类"全场一致"的数据。
+///
+/// Shader 侧直接声明同名变量即可，不要放进 UnityPerMaterial CBUFFER。
+/// </summary>
+public class GlobalPropertiesController : MonoBehaviour
+{
+    [Header("Time")]
+    public bool useUnscaledTime = true;
+
+    [Header("Custom")]
+    public Color globalTint = Color.white;
+    public float globalIntensity = 1f;
+
+    // 全局属性名冲突不会报错，所以一定要加项目前缀
+    private static readonly int GlobalTimeID      = Shader.PropertyToID("_MyGame_GlobalTime");
+    private static readonly int GlobalTintID      = Shader.PropertyToID("_MyGame_GlobalTint");
+    private static readonly int GlobalIntensityID = Shader.PropertyToID("_MyGame_GlobalIntensity");
+
+    private float m_Time;
+
+    private void Update()
+    {
+        // Time.time 受 timeScale 影响（暂停就停）；unscaledTime 不会
+        m_Time = useUnscaledTime ? Time.unscaledTime : Time.time;
+
+        Shader.SetGlobalFloat(GlobalTimeID, m_Time);
+        Shader.SetGlobalColor(GlobalTintID, globalTint);
+        Shader.SetGlobalFloat(GlobalIntensityID, globalIntensity);
+    }
+
+    private void OnDisable()
+    {
+        Shader.SetGlobalFloat(GlobalIntensityID, 1f);
+    }
+}
+```
 
 ---
 
@@ -339,6 +612,73 @@ public class FlashEffect : MonoBehaviour
 - **Animation 窗口**：选中带 Renderer 的物体 → Add Property → Renderer → Material.xxx，直接录关键帧。
 - **DOTween / LeanTween**：`DOTween.To(() => mat.GetFloat(id), x => mat.SetFloat(id, x), 1, 0.5f)`。
 - **Timeline**：需要与其他轨道对齐时用。
+
+以下是完整实现代码（`HitFlashController.cs`）：
+
+```csharp
+using UnityEngine;
+using System.Collections;
+
+/// <summary>
+/// Part 9：受击闪烁。协程 + AnimationCurve，最常用的事件驱动写法。
+/// </summary>
+public class HitFlashController : MonoBehaviour
+{
+    [Header("Settings")]
+    public Color flashColor = Color.red;
+    public float flashDuration = 0.25f;
+
+    [Tooltip("横轴 0→1 表示一次闪烁的进度，纵轴是强度")]
+    public AnimationCurve flashCurve = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
+
+    private static readonly int ColorTintID = Shader.PropertyToID("_ColorTint");
+
+    private Material m_Material;
+    private Coroutine m_Routine;
+
+    private void Awake()
+    {
+        var rend = GetComponent<Renderer>();
+        if (rend != null)
+            m_Material = rend.material;
+    }
+
+    // 外部（比如伤害系统）调用这个
+    public void TakeDamage()
+    {
+        if (m_Material == null)
+            return;
+
+        if (m_Routine != null)
+            StopCoroutine(m_Routine);
+
+        m_Routine = StartCoroutine(Flash());
+    }
+
+    private IEnumerator Flash()
+    {
+        for (float t = 0f; t < flashDuration; t += Time.deltaTime)
+        {
+            float intensity = flashCurve.Evaluate(t / flashDuration);
+
+            // 从原色（白）插值到闪光色，强度由曲线控制
+            Color target = Color.Lerp(Color.white, flashColor, intensity);
+            m_Material.SetColor(ColorTintID, target);
+
+            yield return null;
+        }
+
+        m_Material.SetColor(ColorTintID, Color.white);
+        m_Routine = null;
+    }
+
+    private void OnDestroy()
+    {
+        if (m_Material != null)
+            Destroy(m_Material);
+    }
+}
+```
 
 ---
 
@@ -401,6 +741,91 @@ public class DissolveEffect : MonoBehaviour
 
 > ⚠️ 要看到溶解效果，材质必须已经启用了 `_ALPHA_CUTOUT`（否则 `TestAlphaClip` 里没有 `clip`）。参见 3.1 的变体剥离问题。
 
+以下是完整实现代码（`DissolveController.cs`）：
+
+```csharp
+using UnityEngine;
+using System.Collections;
+using UnityEngine.Events;
+
+/// <summary>
+/// Part 9：溶解效果。
+/// 复用 MyLit 已有的 _ALPHA_CUTOUT 机制：只需把 _Cutoff 从 0 推到 1，
+/// TestAlphaClip 里的 clip(a - _Cutoff) 就会把噪声值低于阈值的像素丢掉。
+/// 前提：材质必须已经启用 _ALPHA_CUTOUT 关键字（脚本会自动开）。
+/// </summary>
+public class DissolveController : MonoBehaviour
+{
+    [Header("Settings")]
+    public float duration = 1.5f;
+    public bool enableCutoutAutomatically = true;
+
+    public UnityEvent onDissolveComplete;
+
+    private static readonly int CutoffID = Shader.PropertyToID("_Cutoff");
+
+    private Material m_Material;
+    private Coroutine m_Routine;
+
+    private void Awake()
+    {
+        var rend = GetComponent<Renderer>();
+        if (rend == null)
+            return;
+
+        m_Material = rend.material;
+
+        if (enableCutoutAutomatically)
+            m_Material.EnableKeyword("_ALPHA_CUTOUT");
+    }
+
+    [ContextMenu("播放溶解")]
+    public void Play()
+    {
+        if (m_Material == null)
+            return;
+
+        if (m_Routine != null)
+            StopCoroutine(m_Routine);
+
+        m_Routine = StartCoroutine(Dissolve());
+    }
+
+    public void Reset()
+    {
+        if (m_Material == null)
+            return;
+
+        if (m_Routine != null)
+        {
+            StopCoroutine(m_Routine);
+            m_Routine = null;
+        }
+
+        m_Material.SetFloat(CutoffID, 0f);
+    }
+
+    private IEnumerator Dissolve()
+    {
+        for (float t = 0f; t < duration; t += Time.deltaTime)
+        {
+            m_Material.SetFloat(CutoffID, t / duration);
+            yield return null;
+        }
+
+        m_Material.SetFloat(CutoffID, 1f);
+        m_Routine = null;
+        onDissolveComplete?.Invoke();
+    }
+
+    private void OnDestroy()
+    {
+        if (m_Material != null)
+            Destroy(m_Material);
+    }
+}
+```
+
 ---
 
 ## 7. 性能
@@ -441,6 +866,72 @@ void PrintProperties()
 
 - **Frame Debugger**：看每个 DrawCall 的关键字组合，判断合批为何断开。
 - **Rendering Debugger → Rendering → SRP Batcher** 面板：直接列出不兼容原因。
+
+---
+
+## 10. 🟦 全局风场控制器（Part 8 配套）
+
+以下是完整实现代码（`WindController.cs`），与 Part 8 的风动系统配套：
+
+```csharp
+using UnityEngine;
+
+/// <summary>
+/// Part 8：全局风场。用 Shader.SetGlobal* 一次设置，全场所有开了 _WIND_ENABLED 的材质都能读到。
+/// 用法：挂到场景里任意一个空物体上，调参数即可。
+/// </summary>
+public class WindController : MonoBehaviour
+{
+    [Header("Wind")]
+    public Vector3 windDirection = new Vector3(1f, 0f, 0f);
+    [Range(0f, 10f)] public float windSpeed = 3f;
+    [Range(0f, 2f)]  public float windStrength = 0.5f;
+    [Range(0f, 5f)]  public float turbulence = 1f;
+
+    [Header("Fallback")]
+    [Tooltip("模型没有顶点色权重时，用这个高度按 Y 轴比例兜底")]
+    public float windHeight = 2f;
+
+    // 缓存 ID：字符串查找有开销，热路径一律用 ID
+    private static readonly int WindDataID       = Shader.PropertyToID("_WindData");
+    private static readonly int WindSpeedID      = Shader.PropertyToID("_WindSpeed");
+    private static readonly int WindTurbulenceID = Shader.PropertyToID("_WindTurbulence");
+    private static readonly int WindHeightID     = Shader.PropertyToID("_WindHeight");
+
+    private void Update()
+    {
+        Vector3 dir = windDirection.normalized * windStrength;
+
+        // xyz = 方向 * 强度，w = 整体强度（Shader 里最后乘在偏移上）
+        Shader.SetGlobalVector(WindDataID, new Vector4(dir.x, dir.y, dir.z, windStrength));
+        Shader.SetGlobalFloat(WindSpeedID, windSpeed);
+        Shader.SetGlobalFloat(WindTurbulenceID, turbulence);
+        Shader.SetGlobalFloat(WindHeightID, windHeight);
+    }
+
+    // 物体被禁用时把风停掉，避免残留上一次的数值
+    private void OnDisable()
+    {
+        Shader.SetGlobalVector(WindDataID, Vector4.zero);
+    }
+
+    // 顶点动画发生在 GPU 上，CPU 端的包围盒还是原始大小，
+    // 位移较大时物体会在还没出画的时候被剔除。把包围盒放大一点即可。
+    [ContextMenu("放大自身及子物体的包围盒")]
+    private void ExpandBoundsOfChildren()
+    {
+        foreach (var filter in GetComponentsInChildren<MeshFilter>())
+        {
+            Mesh mesh = filter.sharedMesh;
+            if (mesh == null)
+                continue;
+
+            mesh.bounds = new Bounds(mesh.bounds.center, mesh.bounds.size * 1.5f);
+            Debug.Log($"[{filter.name}] bounds 已放大", filter);
+        }
+    }
+}
+```
 
 ---
 
