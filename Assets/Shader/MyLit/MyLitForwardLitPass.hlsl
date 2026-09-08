@@ -136,7 +136,10 @@ float4 Fragment(Interpolators input
     // 守卫关键字会处理好条件翻转，这里直接传值就好了
     lightingInput.normalWS = normalWS; // 之前干啥了：拿到viewDirWS给GetViewDirectionTangentSpace使用
     lightingInput.viewDirectionWS = viewDirWS; // 之前干啥了：拿到viewDirTS用于UV偏移采样
+    // normalizedScreenSpaceUV = (0,0) 导致 SSAO 采样错误，把环境反射乘没了
     lightingInput.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
+    lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
+lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
 #if UNITY_VERSION >= 202120
     lightingInput.positionCS = input.positionCS;
     // 调试法线贴图，会在渲染调试器中输出额外视图
@@ -158,8 +161,6 @@ float4 Fragment(Interpolators input
     #endif
 
     SurfaceData surfaceInput = (SurfaceData)0;
-    // 如果以后想做AO，就采样一张Occlusion贴图，URP惯例用g通道
-    surfaceInput.occlusion = 1.0;
     surfaceInput.albedo = colorSample.rgb; //  * _ColorTint.rgb; // 98行已经乘过了
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
     #ifdef _SPECULAR_SETUP
@@ -182,8 +183,13 @@ float4 Fragment(Interpolators input
     // surfaceInput.metallic = _Metalness;  // 这个值已经在采样时乘过去了，不需要再单独赋值了
     // surfaceInput.smoothness = _Smoothness; // 同上
     surfaceInput.emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, uv).rgb * _EmissionTint;
+#ifdef _OCCLUSIONMAP
     surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
-#ifdef _CLEARCOATMAP
+#else
+    // 如果以后想做AO，就采样一张Occlusion贴图，URP惯例用g通道
+    surfaceInput.occlusion = 1.0;
+#endif
+    #ifdef _CLEARCOATMAP
     surfaceInput.clearCoatMask = SAMPLE_TEXTURE2D(_ClearCoatMask, sampler_ClearCoatMask, uv).r * _ClearCoatStrength;
     surfaceInput.clearCoatSmoothness = SAMPLE_TEXTURE2D(_ClearCoatSmoothnessMask, sampler_ClearCoatSmoothnessMask, uv).r * _ClearCoatSmoothness;
 #endif
@@ -195,7 +201,7 @@ float4 Fragment(Interpolators input
 // #else
 //     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
 // #endif
-
+//return half4(surfaceInput.occlusion.xxx, 1);
     return UniversalFragmentPBR(lightingInput, surfaceInput);
 }
 

@@ -146,6 +146,7 @@ Material:
     - _DotScaleY: 1
     - _DstBlend: 0
     - _DstBlendAlpha: 0
+    - _EmissionToggle: 0
     - _EnvironmentReflections: 1
     - _FaceRenderingMode: 0
     - _GlossMapScale: 1
@@ -156,6 +157,7 @@ Material:
     - _Mode: 0
     - _NormalStrength: 1
     - _OcclusionStrength: 1
+    - _OcclusionToggle: 0
     - _Parallax: 0.02
     - _ParallaxStrength: 0.005
     - _QueueOffset: 0

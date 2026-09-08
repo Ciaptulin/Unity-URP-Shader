@@ -1,16 +1,17 @@
 # Unity URP Shader — MyLit
 
-一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果，支持 **法线贴图**、**金属度贴图**、**镜面反射贴图**、**粗糙度贴图**、**自发光**、**视差贴图** 和 **清漆（Clear Coat）** 效果。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
+一个基于 Unity URP 的自定义 PBR 着色器，实现了 **程序化点阵镂空（Dot Matrix Hatching）** 效果，支持 **法线贴图**、**金属度贴图**、**镜面反射贴图**、**粗糙度贴图**、**自发光**、**视差贴图**、**遮挡贴图** 和 **清漆（Clear Coat）** 效果。支持多种表面类型和面渲染模式，带有自定义材质编辑器。
 
 ---
 
 ## ✨ 特性
 
 - **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
-- **附加光源支持**：完整的多光源前向渲染，支持附加光源阴影 (`_ADDITIONAL_LIGHTS` / `_ADDITIONAL_LIGHTS_SHADOWS`)
+- **附加光源支持**：完整的多光源前向渲染，支持附加光源阴影 (`_ADDITIONAL_LIGHTS` / `_ADDITIONAL_LIGHT_SHADOWS`)
 - **反射探针**：支持反射探针混合与盒投影 (`_REFLECTION_PROBE_BLENDING` / `_REFLECTION_PROBE_BOX_PROJECTION`)
 - **光源层级**：兼容 URP 光源层级系统 (`_LIGHT_LAYERS`)
 - **屏幕空间遮挡**：支持屏幕空间环境光遮蔽 (`_SCREEN_SPACE_OCCLUSION`)
+- **SSAO 修复**：已添加 `normalizedScreenSpaceUV` 赋值，SSAO 可正确采样
 - **光照贴图烘焙**：完整支持 baked lightmap (`LIGHTMAP_ON` / `DIRLIGHTMAP_COMBINED` / `DYNAMICLIGHTMAP_ON`)，自动回退 SH 探针兜底
 - **自发光参与 GI**：自发光贴图 + HDR 色调可参与光照烘焙 (`_EMISSION` 关键字 + `BakedEmissive` 标记)
 - **双工作流支持**：
@@ -18,10 +19,10 @@
   - **镜面反射工作流**：镜面反射纹理 + 色调调节
 - **法线贴图支持**：完整的 TBN 切线空间转换，可调节法线强度
 - **粗糙度贴图**：支持粗糙度/平滑度遮罩纹理，与全局系数联动
-- **自发光贴图**：支持 HDR 自发光色调，可驱动后处理 Bloom
+- **自发光贴图**：支持 HDR 自发光色调，可驱动后处理 Bloom，带 Toggle 开关
 - **视差贴图（Parallax Mapping）**：基于高度图的 UV 偏移采样，增加表面深度感
 - **清漆效果（Clear Coat）**：支持清漆遮罩 + 强度 + 光滑度，模拟车漆/漆面多层反射
-- **遮挡贴图（Occlusion Map）**：支持环境光遮蔽贴图（G 通道），可调节遮蔽强度，增强接触阴影和凹陷处的真实感
+- **遮挡贴图（Occlusion Map）**：支持环境光遮蔽贴图（G 通道），带 Toggle 开关，可调节遮蔽强度
 - **程序化点阵镂空**：通过数学计算在片元着色器中生成圆形点阵，实现半色调（halftone）镂空效果
 - **多种表面类型**：
   - `Opaque` — 不透明
@@ -59,23 +60,30 @@
 
 ```
 Assets/
-├── Docs/                          # 教程文档
-│   └── Unity着色器教程/            # Unity 着色器教程（Part1-Part9 + 示例）
+├── Docs/                          # 教程文档 & 交付文档
+│   ├── Unity着色器教程/            # Unity 着色器教程（Part1-Part9 + 示例）
+│   └── 项目交付文档.md             # 专家 AI 交付文档
 ├── Editor/
 │   └── MyLitCustomInspector.cs    # 自定义材质编辑器
 ├── Material/
-│   └── MyLitSphere.mat            # 示例材质
-├── Models/                        # 3D 模型资源
+│   ├── MyLitSphere.mat            # MyLit 示例材质
+│   ├── 东墩.mat / 北墩.mat / 南墩.mat / 西墩.mat  # 场景材质
+│   ├── 天花板.mat / 底面.mat      # 场景材质
+│   ├── 金属球.mat / 金属球lit.mat # 反射探针测试材质
+│   └── ...
+├── Models/                        # 3D 角色模型 + 材质
 ├── Scenes/
 │   ├── SampleScene.unity          # 示例场景
-│   └── SampleScene/               # 场景子资源
-├── Scripts/                       # C# 脚本
+│   └── SampleScene/               # 光照贴图 / 反射探针 / ShadowMask
+├── Scripts/
+│   └── AdditionalLightShadowController.cs # 附加光源阴影控制
 ├── Settings/                      # URP 设置资源
 │   ├── URP-Balanced.asset         # URP Balanced 管线配置
 │   ├── URP-HighFidelity.asset     # URP High Fidelity 管线配置
 │   ├── URP-Performant.asset       # URP Performant 管线配置
 │   └── ...                        # 渲染器 & Volume 配置文件
 ├── Shader/
+│   ├── MaterialSphere.shader      # 反射探针测试用金属球 Shader
 │   └── MyLit/
 │       ├── MyLit.shader              # 主 Shader 文件（属性 + Pass 定义）
 │       ├── MyLitCommon.hlsl          # 通用函数（点阵计算、Alpha 裁切）
@@ -102,7 +110,7 @@ Assets/
 │   │   ├── rusty_metal_05_nor_gl_4k.exr
 │   │   ├── rusty_metal_05_rough_4k.exr
 │   │   └── rusty_metal_05_disp_4k.png
-│   └── 菴/                         # 额外贴图资源
+│   └── 菴/                         # 角色贴图资源
 └── _lighting/                     # 光照烘焙数据
 ```
 
@@ -118,10 +126,12 @@ Assets/
    - 选择 `TransparentBlend` 时会显示 **Blend Type** 下拉菜单
    - 切换 **Use specular workflow** 可在金属度 / 镜面反射工作流之间切换
    - 启用 **Use roughness texture** 可激活粗糙度贴图采样
+   - 切换 **自发光** Toggle 可启用自发光
+   - 切换 **使用遮挡贴图** Toggle 可启用遮挡贴图采样
    - 调整 **Dot Density**（点阵密度）和 **Dot Radius**（点半径）控制镂空效果
    - 调整 **Dot Scale X/Y** 可拉伸 UV 方向的点阵形状
 4. **分配贴图**：
-   - **Color** → 主纹理（反照率）
+   - **颜色贴图** → 主纹理（反照率）
    - **Normal** → 法线贴图
    - **Metalness mask** → 金属度遮罩纹理
    - **Specular map** → 镜面反射纹理（仅 Specular 工作流）
@@ -130,7 +140,7 @@ Assets/
    - **Height/displacement map** → 视差高度图
    - **Clear coat mask** → 清漆遮罩纹理
    - **Clear coat smoothness mask** → 清漆光滑度遮罩纹理
-   - **Occlusion** → 环境光遮蔽贴图（G 通道）
+   - **遮挡贴图** → 环境光遮蔽贴图（G 通道）
 5. **调整参数**：
    - **Normal strength** — 控制法线凹凸程度
    - **Metalness** — 全局金属度系数
@@ -140,7 +150,7 @@ Assets/
    - **Parallax strength** — 视差偏移强度
    - **Clear coat strength** — 清漆强度
    - **Clear coat smoothness** — 清漆光滑度
-   - **Occlusion strength** — 环境光遮蔽强度
+   - **遮挡强度** — 环境光遮蔽强度
 6. **应用到物体**：将 Material 拖拽到场景中的 Mesh Renderer 上
 
 ---
@@ -151,7 +161,7 @@ Assets/
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `Color` | 2D 贴图 | 主纹理（RGB = 反照率, A = 透明度） |
+| `颜色贴图` | 2D 贴图 | 主纹理（RGB = 反照率, A = 透明度） |
 | `Tint` | Color | 颜色 tint，与纹理颜色相乘 |
 
 ### 工作流切换
@@ -195,6 +205,7 @@ Assets/
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
+| `自发光` | Toggle | 开启后启用自发光参与 GI 烘焙 |
 | `Emission map` | 2D 贴图 | 自发光纹理 |
 | `Emission tint` | Color (HDR) | HDR 自发光色调，可驱动 Bloom 后处理 |
 
@@ -211,8 +222,9 @@ Assets/
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `Occlusion` | 2D 贴图 | 环境光遮蔽贴图（G 通道控制遮蔽强度） |
-| `Occlusion strength` | Range(0, 1) | 遮蔽强度系数，0 = 无遮蔽，1 = 完全遮蔽 |
+| `使用遮挡贴图` | Toggle | 开启后启用遮挡贴图采样 |
+| `遮挡贴图` | 2D 贴图 | 环境光遮蔽贴图（G 通道控制遮蔽强度） |
+| `遮挡强度` | Range(0, 1) | 遮蔽强度系数，0 = 无遮蔽，1 = 完全遮蔽 |
 
 ### 点阵镂空
 
@@ -251,7 +263,8 @@ Assets/
 | `_ALPHA_CUTOUT` | `shader_feature_local` | Alpha 裁切（Cutout 模式） |
 | `_DOUBLE_SIDED_NORMALS` | `shader_feature_local` | 双面法线翻转 |
 | `_ALPHAPREMULTIPLY_ON` | `shader_feature_local_fragment` | 预乘 Alpha 混合（玻璃效果） |
-| `_EMISSION` | `shader_feature_local_fragment` | 自发光参与 GI 烘焙，有自发光贴图或非黑 HDR 色调时启用 |
+| `_EMISSION` | `shader_feature_local_fragment` | 自发光，Toggle 开关控制 |
+| `_OCCLUSIONMAP` | `shader_feature_local_fragment` | 遮挡贴图，Toggle 开关控制 |
 
 #### Multi Compile（URP 全局关键字）
 
@@ -261,7 +274,7 @@ Assets/
 | `_MAIN_LIGHT_SHADOWS_CASCADE` | `multi_compile` | 级联阴影 |
 | `_SHADOWS_SOFT` | `multi_compile_fragment` | 软阴影 |
 | `_ADDITIONAL_LIGHTS` | `multi_compile` | 附加光源 |
-| `_ADDITIONAL_LIGHTS_SHADOWS` | `multi_compile_fragment` | 附加光源阴影 |
+| `_ADDITIONAL_LIGHT_SHADOWS` | `multi_compile_fragment` | 附加光源阴影 |
 | `_REFLECTION_PROBE_BLENDING` | `multi_compile_fragment` | 反射探针混合 |
 | `_REFLECTION_PROBE_BOX_PROJECTION` | `multi_compile_fragment` | 反射探针盒投影 |
 | `_LIGHT_LAYERS` | `multi_compile_fragment` | 光源层级 |
@@ -326,6 +339,32 @@ normalWS = normalize(normalWS);
 #endif
 ```
 
+### SSAO 修复
+
+此前 `lightingInput.normalizedScreenSpaceUV` 未赋值，导致 SSAO 采样位置错误。现已修复：
+
+```hlsl
+lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
+lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
+```
+
+### 遮挡贴图（Occlusion Map）
+
+遮挡贴图用于模拟物体表面凹陷处的环境光遮蔽效果，增强接触阴影和细节处的真实感：
+
+- **采样**：从 `_OcclusionMap` 的 G 通道读取遮蔽值（符合 URP 惯例）
+- **强度控制**：`_OcclusionStrength` 系数调节遮蔽程度，0 = 无遮蔽，1 = 完全遮蔽
+- **开关控制**：通过 `[Toggle(_OCCLUSIONMAP)]` 在 Inspector 中切换
+- **应用**：直接赋值给 `surfaceInput.occlusion`，由 `UniversalFragmentPBR` 参与光照计算
+
+```hlsl
+#ifdef _OCCLUSIONMAP
+    surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
+#else
+    surfaceInput.occlusion = 1.0;
+#endif
+```
+
 ### 自定义 Inspector 关键字联动
 
 | Surface Type | Render Queue | Blend | ZWrite | Alpha Cutout Keyword |
@@ -356,21 +395,45 @@ Shader 完整支持 URP 光照贴图烘焙流程：
 - **自发光 GI**：自发光贴图 + HDR 色调通过 `Meta Pass` 输出给光照烘焙器，配合 `_EMISSION` 关键字和 `BakedEmissive` 标记参与全局光照
 - **调试**：`_DEBUG_BAKED_GI` 关键字可输出烘焙 GI 为灰度，方便排查间接光照问题
 
-### 遮挡贴图（Occlusion Map）
+### MaterialSphere.shader
 
-遮挡贴图用于模拟物体表面凹陷处的环境光遮蔽效果，增强接触阴影和细节处的真实感：
+反射探针测试用金属球 Shader，用于排查反射探针烘焙问题：
 
-- **采样**：从 `_OcclusionMap` 的 G 通道读取遮蔽值（符合 URP 惯例）
-- **强度控制**：`_OcclusionStrength` 系数调节遮蔽程度，0 = 无遮蔽，1 = 完全遮蔽
-- **应用**：直接赋值给 `surfaceInput.occlusion`，由 `UniversalFragmentPBR` 参与光照计算
-
-```hlsl
-surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
-```
+- 完整的 PBR 实现（`UniversalFragmentPBR`）
+- 支持反射探针混合与盒投影
+- 支持 GPU Instancing
+- 复用 URP 内置 Lit 的 ShadowCaster / DepthOnly / DepthNormals / Meta Pass
+- 属性：`_BaseColor` / `_MainTex` / `_Metallic` / `_Smoothness`
 
 ---
 
 ## 🔄 Changelog
+
+### — Toggle 开关 + SSAO 修复 + 场景更新
+
+**Shader 改动：**
+- 属性名本地化为中文
+- 自发光新增 `[Toggle(_EMISSION)]` 开关，可通过 Inspector 切换
+- 遮挡贴图新增 `[Toggle(_OCCLUSIONMAP)]` 开关，可通过 Inspector 切换
+- 修复 `_ADDITIONAL_LIGHTS_SHADOWS` → `_ADDITIONAL_LIGHT_SHADOWS`（URP 16 正确关键字名）
+- 新增 `#pragma shader_feature_local_fragment _EMISSION` 和 `_OCCLUSIONMAP`
+- 遮挡贴图采样改为 `#ifdef _OCCLUSIONMAP` 守卫，未启用时回退 `occlusion = 1.0`
+
+**SSAO 修复：**
+- 添加 `lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS)`
+- 添加 `lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0)`
+
+**新增文件：**
+- `MaterialSphere.shader` — 反射探针测试用金属球 Shader
+- 场景材质：东墩 / 北墩 / 南墩 / 西墩 / 天花板 / 底面 / 金属球 / 金属球lit
+
+**场景更新：**
+- SampleScene 大规模更新（新增物体、调整布局）
+- 新增 Lightmap-1 ~ Lightmap-4 烘焙数据
+- 新增 ReflectionProbe-1
+- URP-Balanced / URP-Performant 启用反射探针混合与盒投影
+
+---
 
 ### — 遮挡贴图支持 + 教程文档
 
@@ -408,7 +471,7 @@ surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, u
 ### — 附加光源 / 反射探针 / 光源层级 / 屏幕空间遮挡 + 阴影控制脚本
 
 **新增功能：**
-- 添加 **附加光源支持**：`_ADDITIONAL_LIGHTS` + `_ADDITIONAL_LIGHTS_SHADOWS` 多编译变体，完整支持 URP 多光源前向渲染
+- 添加 **附加光源支持**：`_ADDITIONAL_LIGHTS` + `_ADDITIONAL_LIGHT_SHADOWS` 多编译变体，完整支持 URP 多光源前向渲染
 - 添加 **反射探针混合与盒投影**：`_REFLECTION_PROBE_BLENDING` + `_REFLECTION_PROBE_BOX_PROJECTION`
 - 添加 **光源层级**支持：`_LIGHT_LAYERS`，兼容 URP 光源层级系统
 - 添加 **屏幕空间环境光遮蔽**：`_SCREEN_SPACE_OCCLUSION`

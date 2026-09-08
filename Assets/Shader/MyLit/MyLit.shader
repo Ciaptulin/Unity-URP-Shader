@@ -3,7 +3,7 @@ Shader "Custom/MyLit"
     Properties{
         [Header(Surface options)]  // 创建文本头部
         // [MainTexture] and [MainColor] allow Material.mainTexture and Material.color to use the correct properties
-        [MainTexture] _ColorMap("Color", 2D) = "white" {}
+        [MainTexture] _ColorMap("颜色贴图", 2D) = "white" {}
         [MainColor] _ColorTint("Tint", Color) = (1,1,1,1)
         // 定义一个滑条，用来控制透明度裁切的阈值
         [HideInInspector] _Cutoff("Alpha cutout threshold", Range(0,1)) = 0.5
@@ -17,6 +17,7 @@ Shader "Custom/MyLit"
         _SpecularTint("Specular tint", Color) = (1,1,1,1)
         [NoScaleOffset] _SmoothnessMask("Smoothness mask", 2D) = "white" {}
         _Smoothness("Smoothness", Range(0,1)) = 0.5
+        [Toggle(_EMISSION)] _EmissionToggle("自发光", Float) = 0
         [NoScaleOffset] _EmissionMap("Emission map", 2D) = "white" {}
         [HDR]_EmissionTint("Emission tint", Color) = (0,0,0,0)
         [NoScaleOffset] _ParallaxMap("Height/displacement map", 2D) = "white" {}
@@ -34,8 +35,9 @@ Shader "Custom/MyLit"
 
         // 遮挡贴图
         [Header(Occlusion)]
-        [NoScaleOffset] _OcclusionMap("Occlusion", 2D) = "white" {}
-        _OcclusionStrength("Occlusion strength", Range(0,1)) = 1
+        [Toggle(_OCCLUSIONMAP)] _OcclusionToggle("使用遮挡贴图", Float) = 0
+        [NoScaleOffset] _OcclusionMap("遮挡贴图", 2D) = "white" {}
+        _OcclusionStrength("遮挡强度", Range(0,1)) = 1
 
 
         // [Enum(UnityEngine.Rendering.CullMode)] _Cull("Cull mode", Float) = 2
@@ -94,7 +96,7 @@ Shader "Custom/MyLit"
             #pragma multi_compile_fragment _ _SHADOWS_SOFT // 只影响片元
             // 添加附加光源支持
             #pragma multi_compile _ _ADDITIONAL_LIGHTS
-            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHTS_SHADOWS
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
             // 反射探针混合与盒投影
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
@@ -109,6 +111,9 @@ Shader "Custom/MyLit"
             #pragma multi_compile _ DYNAMICLIGHTMAP_ON
             #pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
             #pragma multi_compile _ SHADOWS_SHADOWMASK
+            // 加了 [Toggle(_EMISSION)] 属性，声明一下
+            #pragma shader_feature_local_fragment _EMISSION
+            #pragma shader_feature_local_fragment _OCCLUSIONMAP
 
             // 光照探针SH评估  当前没用到
             // #pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX

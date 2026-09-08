@@ -177,6 +177,7 @@ Material:
     - _DotScaleY: 0.41
     - _DstBlend: 0
     - _DstBlendAlpha: 0
+    - _EmissionToggle: 0
     - _EnvironmentReflections: 1
     - _FaceRenderingMode: 0
     - _FaceRendingMode: 0
@@ -188,6 +189,7 @@ Material:
     - _Metalness: 0.06
     - _NormalStrength: 1
     - _OcclusionStrength: 1
+    - _OcclusionToggle: 0
     - _Parallax: 0.005
     - _ParallaxStrength: 0.008
     - _QueueControl: 0
