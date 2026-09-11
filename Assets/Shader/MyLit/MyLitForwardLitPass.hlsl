@@ -139,7 +139,7 @@ float4 Fragment(Interpolators input
     // normalizedScreenSpaceUV = (0,0) 导致 SSAO 采样错误，把环境反射乘没了
     lightingInput.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
     lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
-lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
+    lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
 #if UNITY_VERSION >= 202120
     lightingInput.positionCS = input.positionCS;
     // 调试法线贴图，会在渲染调试器中输出额外视图
@@ -201,6 +201,17 @@ lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
 // #else
 //     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
 // #endif
+// 在片元函数中采样Cookie，定义了自己的BRDF需自己采样，还需加上
+// 获取主光源（带阴影坐标和AO）
+// Light mainLight = GetMainLight(lightingInput.shadowCoord, lightingInput.positionWS, half(1,1,1,1));
+
+// #ifdef _LIGHT_COCKIES
+//     // 主光源Cookie采样
+//     float4 cookiePos = TransformWorldToCookiePositionWS(input.positionWS, mainLight);
+//     float4 cookieSample = SAMPLE_TEXTURE2D(_MainLightCookieTexture, sampler_MainLightCookieTexture, cookiePos.xy).r;
+//     mainLight.color *= cookieSample; // 用Cookie调制光强
+// #endif
+
 //return half4(surfaceInput.occlusion.xxx, 1);
     return UniversalFragmentPBR(lightingInput, surfaceInput);
 }

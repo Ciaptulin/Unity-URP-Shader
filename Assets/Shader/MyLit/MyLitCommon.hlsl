@@ -14,8 +14,8 @@ float _Cutoff; // 让给GPU接收到透明度裁切阈值的滑条值
 float _NormalStrength;
 float _Metalness;
 float4 _SpecularTint;
+float4 _EmissionTint;
 float _Smoothness;
-float3 _EmissionTint;
 float _ParallaxStrength;
 float _ClearCoatStrength;
 float _ClearCoatSmoothness;
@@ -37,7 +37,9 @@ TEXTURE2D(_ParallaxMap); SAMPLER(sampler_ParallaxMap);
 TEXTURE2D(_ClearCoatMask); SAMPLER(sampler_ClearCoatMask);
 TEXTURE2D(_ClearCoatSmoothnessMask); SAMPLER(sampler_ClearCoatSmoothnessMask);
 TEXTURE2D(_OcclusionMap); SAMPLER(sampler_OcclusionMap);
-
+// 这两行已经在URP库的Lighting.hlsl里声明了，无需重复声明
+// TEXTURE2D(_MainLightCookieTexture); SAMPLER(sampler_MainLightCookieTexture);
+// TEXTURE2D(_AdditionalCookieTexture); SAMPLER(sampler_AdditionalCookieTexture);
 
 void TestAlphaClip(float4 colorSample) {
 #ifdef _ALPHA_CUTOUT

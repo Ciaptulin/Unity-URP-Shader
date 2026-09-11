@@ -42,6 +42,7 @@
 - **SRP Batcher 兼容**：使用 `CBUFFER_START(UnityPerMaterial)` 包裹材质属性
 - **DEBUG_DISPLAY 支持**：可配合 Unity 渲染调试器查看法线数据
 - **多版本兼容**：支持 Unity 2021.3+ 和 2022+ 的 API 差异
+- **光源 Cookie 支持**：支持主光源和附加光源 Cookie（`_MAIN_LIGHT_COOKIE` / `_ADDITIONAL_LIGHTS_COOKIE`），可实现百叶窗投影等效果
 - **Shader Variant 优化**：使用 `shader_feature_local` / `shader_feature_local_fragment` 按需编译变体，减少包体
 
 ---
@@ -83,7 +84,7 @@ Assets/
 │   ├── URP-Performant.asset       # URP Performant 管线配置
 │   └── ...                        # 渲染器 & Volume 配置文件
 ├── Shader/
-│   ├── MaterialSphere.shader      # 反射探针测试用金属球 Shader
+│   ├── MaterialSphere.shader      # 反射探针测试用金属球 Shader（复用 URP Lit 的 ShadowCaster/DepthOnly/DepthNormals/Meta）
 │   └── MyLit/
 │       ├── MyLit.shader              # 主 Shader 文件（属性 + Pass 定义）
 │       ├── MyLitCommon.hlsl          # 通用函数（点阵计算、Alpha 裁切）
@@ -265,6 +266,8 @@ Assets/
 | `_ALPHAPREMULTIPLY_ON` | `shader_feature_local_fragment` | 预乘 Alpha 混合（玻璃效果） |
 | `_EMISSION` | `shader_feature_local_fragment` | 自发光，Toggle 开关控制 |
 | `_OCCLUSIONMAP` | `shader_feature_local_fragment` | 遮挡贴图，Toggle 开关控制 |
+| `_MAIN_LIGHT_COOKIE` | `multi_compile` | 主光源 Cookie |
+| `_ADDITIONAL_LIGHTS_COOKIE` | `multi_compile` | 附加光源 Cookie |
 
 #### Multi Compile（URP 全局关键字）
 
@@ -341,11 +344,25 @@ normalWS = normalize(normalWS);
 
 ### SSAO 修复
 
-此前 `lightingInput.normalizedScreenSpaceUV` 未赋值，导致 SSAO 采样位置错误。现已修复：
+此前 `lightingInput.normalizedScreenSpaceUV` 未赋值，导致 SSAO 采样位置错误，环境反射被乘没。现已修复：
 
 ```hlsl
 lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
 lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
+```
+
+### 光源 Cookie
+
+支持主光源和附加光源 Cookie，可实现百叶窗投影、烛光闪烁等效果：
+
+- **关键字**：`_MAIN_LIGHT_COOKIE` / `_ADDITIONAL_LIGHTS_COOKIE`
+- **采样**：URP 自动处理，`UniversalFragmentPBR` 内部集成
+- **无需手动编码**：不像自定义 BRDF 那样需要手动采样 Cookie 纹理
+
+```hlsl
+// MyLit.shader 中声明
+#pragma multi_compile _ _MAIN_LIGHT_COOKIE
+#pragma multi_compile _ _ADDITIONAL_LIGHTS_COOKIE
 ```
 
 ### 遮挡贴图（Occlusion Map）
@@ -395,6 +412,14 @@ Shader 完整支持 URP 光照贴图烘焙流程：
 - **自发光 GI**：自发光贴图 + HDR 色调通过 `Meta Pass` 输出给光照烘焙器，配合 `_EMISSION` 关键字和 `BakedEmissive` 标记参与全局光照
 - **调试**：`_DEBUG_BAKED_GI` 关键字可输出烘焙 GI 为灰度，方便排查间接光照问题
 
+### 深度法线与运动向量
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **Depth Normals Pass** | ✅ 已完成 | `MyLitDepthNormalsPass.hlsl`，输出世界法线用于 SSAO 等后效 |
+| **Depth Only Pass** | ✅ 已完成 | `MyLitDepthOnlyPass.hlsl`，写入深度缓冲用于景深等后效 |
+| **运动向量 Pass** | ❌ 未完成 | 需要运动模糊时需添加 `MotionVectors` Pass |
+
 ### MaterialSphere.shader
 
 反射探针测试用金属球 Shader，用于排查反射探针烘焙问题：
@@ -408,6 +433,30 @@ Shader 完整支持 URP 光照贴图烘焙流程：
 ---
 
 ## 🔄 Changelog
+
+### — Cookie 支持 + SSAO 修复 + Toggle 开关
+
+**Cookie 支持：**
+- 添加 `_MAIN_LIGHT_COOKIE` 和 `_ADDITIONAL_LIGHTS_COOKIE` 关键字
+- 支持主光源和附加光源 Cookie（百叶窗投影等效果）
+- URP 自动处理 Cookie 采样，无需手动编码
+- 新增 `MaterialSphere.shader` 用于反射探针测试
+
+**SSAO 修复：**
+- 添加 `lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS)`
+- 添加 `lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0)`
+
+**Toggle 开关：**
+- 自发光新增 `[Toggle(_EMISSION)]` 开关
+- 遮挡贴图新增 `[Toggle(_OCCLUSIONMAP)]` 开关
+- 属性名本地化为中文
+
+**场景更新：**
+- SampleScene 大规模更新
+- 新增 Lightmap-1~4 烘焙数据、ReflectionProbe-1
+- URP 设置启用反射探针混合与盒投影
+
+---
 
 ### — Toggle 开关 + SSAO 修复 + 场景更新
 

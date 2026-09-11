@@ -97,6 +97,11 @@ Shader "Custom/MyLit"
             // 添加附加光源支持
             #pragma multi_compile _ _ADDITIONAL_LIGHTS
             #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
+            
+            // Cookie支持
+            #pragma multi_compile _ _MAIN_LIGHT_COOKIE
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_COOKIE
+
             // 反射探针混合与盒投影
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
@@ -114,6 +119,8 @@ Shader "Custom/MyLit"
             // 加了 [Toggle(_EMISSION)] 属性，声明一下
             #pragma shader_feature_local_fragment _EMISSION
             #pragma shader_feature_local_fragment _OCCLUSIONMAP
+            // 光源cookie
+//            #pragma multi_compile _ _LIGHT_COOKIES
 
             // 光照探针SH评估  当前没用到
             // #pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
