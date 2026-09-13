@@ -1,220 +1,184 @@
 // 本文件包含前向光照通道的顶点和片段函数
-// 这是通过读取材质、光照、阴影等数据来计算材质可见颜色的着色器通道
+// 通过读取材质、光照、阴影等数据来计算材质可见颜色
+// 主体对应教程 Part2 → Part5
 #ifndef MY_LIT_FORWARD_LIT_PASS_INCLUDED
 #define MY_LIT_FORWARD_LIT_PASS_INCLUDED
-// 引入URP库函数和我们自己的通用函数
+
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/ParallaxMapping.hlsl"
 #include "MyLitCommon.hlsl"
-// 此属性结构体接收当前渲染网格的相关数据
-// 数据会根据语义自动填充到对应字段中
-struct Attributes {
-    float3 positionOS : POSITION; // 对象空间中的位置
+
+// 顶点着色器输入：接收当前渲染网格的数据，由语义自动填充
+struct Attributes
+{
+    float3 positionOS : POSITION;   // 对象空间位置
     float3 normalOS : NORMAL;
     float4 tangentOS : TANGENT;
-    float2 uv : TEXCOORD0; // 材质贴图uv
-    float2 uv2 : TEXCOORD1;  // 光照贴图UV
+    float2 uv : TEXCOORD0;          // 材质贴图 UV
+    float2 uv2 : TEXCOORD1;         // 光照贴图 UV [Part5-二]
 };
 
-// 此结构体由顶点函数输出，并作为片段函数的输入
-// 注意：字段将被中间的光栅化阶段进行变换
-struct Interpolators {
-    // 该值从顶点函数输出时应包含裁剪空间中的位置（类似于屏幕上的位置）
-    // 当从片段函数读取时，它将被转换为当前片段在屏幕上的像素位置
+// 顶点着色器输出，经光栅化插值后作为片元着色器输入
+struct Interpolators
+{
+    // 顶点阶段输出裁剪空间位置，片元阶段读取为屏幕像素位置
     float4 positionCS : SV_POSITION;
     float2 uv : TEXCOORD0;
     float2 uv2 : TEXCOORD1;
     float3 positionWS : TEXCOORD2;
     float3 normalWS : TEXCOORD3;
     float4 tangentWS : TEXCOORD4;
-    half vertexSH : TEXCOORD5;  // 无光照时采用球谐函数兜底
-
+    half vertexSH : TEXCOORD5;      // 无光照贴图时用球谐函数兜底 [Part5-二]
 };
 
-// #ifndef MY_LIT_COMMON_INCLUDED
-// // "#ifndef MY_LIT_COMMON_INCLUDED" is equivalent to "#if !defined(MY_LIT_COMMON_INCLUDED)"
-// #define MY_LIT_COMMON_INCLUDED
-// // 用 CBUFFER 包裹材质属性 为了兼容 SRP Batcher（不然动态合批会有问题）
-// CBUFFER_START(UnityPerMaterial)
-// float4 _ColorTint;
-// float4 _ColorMap_ST; // 这是Unity自动设置的，供TRANSFORM_TEX使用来应用UV平铺
-// float _Smoothness;
-// float _Cutoff; // 让给GPU接收到透明度裁切阈值的滑条值
-// CBUFFER_END
-// // Textures
-// TEXTURE2D(_ColorMap); SAMPLER(sampler_ColorMap); // RGB = albedo, A = alpha
-// #endif
-
-
 // 顶点函数。对网格上的每个顶点运行一次。
-// 必须输出每个顶点在屏幕上应出现的位置，以及片段函数所需的任何数据
-Interpolators Vertex(Attributes input) {
+// 必须输出顶点在屏幕上的位置，以及片段函数所需的任何数据
+Interpolators Vertex(Attributes input)
+{
     Interpolators output;
 
-    // 这些辅助函数位于 URP/ShaderLib/ShaderVariablesFunctions.hlsl 中
-    // 用于将对象空间的值转换为世界空间和裁剪空间
-    VertexPositionInputs posnInputs = GetVertexPositionInputs(input.positionOS);
-    // 将法线向量从对象空间变换到世界空间
-    VertexNormalInputs normInput = GetVertexNormalInputs(input.normalOS);
+    // 这些辅助函数位于 URP/ShaderLib/ShaderVariablesFunctions.hlsl
+    // 用于将对象空间的值转换到世界空间和裁剪空间
+    VertexPositionInputs posInputs = GetVertexPositionInputs(input.positionOS);
+    VertexNormalInputs normInputs = GetVertexNormalInputs(input.normalOS);
 
     // 将位置和方向数据传递给片段函数
-    output.positionCS = posnInputs.positionCS;
-    // 顶点函数里使用采样器采样uv
+    output.positionCS = posInputs.positionCS;
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
-    // output.uv2 = input.uv2; // 传递光照贴图UV
-    // 宏定义在 Lighting.hlsl 里
+    // 宏定义在 Lighting.hlsl 里 [Part5-二]
     OUTPUT_LIGHTMAP_UV(input.uv2, unity_LightmapST, output.uv2);
-    output.normalWS = normInput.normalWS;
-    output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
-    output.positionWS = posnInputs.positionWS;
+    output.normalWS = normInputs.normalWS;
+    output.tangentWS = float4(normInputs.tangentWS, input.tangentOS.w);
+    output.positionWS = posInputs.positionWS;
 
-    // 修复：没有LIGHTMAP_ON时（光照探针/lightmap被剥离）靠SH提供间接光
-    output.vertexSH = SampleSHVertex(normInput.normalWS);
+    // 没有 LIGHTMAP_ON 时（光照探针/lightmap 被剥离）靠 SH 提供间接光 [Part5-二]
+    output.vertexSH = SampleSHVertex(normInputs.normalWS);
 
     return output;
 }
-// 已经移动到MyLitCommon.hlsl
-// void TestAlphaClip(float4 colorSample){
-//     #ifdef _ALPHA_CUTOUT
-//     clip(colorSample.a * _ColorTint.a - _Cutoff);
-// #endif
-// }
-// 片段函数。对每个片段（可理解为屏幕上的一个像素）运行一次
-// 必须输出该像素的最终颜色
+
+// 片段函数。对每个片段（屏幕上的一个像素）运行一次，输出最终颜色
 float4 Fragment(Interpolators input
-    // 好刁钻的写法
+    // 双面渲染时接收面朝向
     #ifdef _DOUBLE_SIDED_NORMALS
     , FRONT_FACE_TYPE frontFace : FRONT_FACE_SEMANTIC
     #endif
-    ) : SV_TARGET {
-    // 重排代码
+    ) : SV_TARGET
+{
+    // ===== [Part3] 法线准备 =====
     float3 normalWS = normalize(input.normalWS);
     #ifdef _DOUBLE_SIDED_NORMALS
     normalWS *= IS_FRONT_VFACE(frontFace, 1, -1);
     #endif
-    // 重排代码，法线和视线方向在任何纹理采样之前计算，我们需要根据这些值计算新UV
-    // 过程中使用这些 positionWS 和 viewDirectionWS 变量，转化后再传入input内
-    // 这里就是把变量转移出来用
-    float3 positionWS = input.positionWS;
-    float3 viewDirWS = GetWorldSpaceNormalizeViewDir(input.positionWS); // In ShaderVariablesFunctions.hlsl
-    float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS); // In ParallaxMapping.hlsl
-  
-    float2 uv = input.uv; // 拿出uv
-    // return float4(uv, 0, 1); // uv可视化
-    // 对uv进行偏移采样
+
+    // ===== [Part4] 视差：先算法线与视线方向，再偏移 uv =====
+    float3 viewDirWS = GetWorldSpaceNormalizeViewDir(input.positionWS);                      // In ShaderVariablesFunctions.hlsl
+    float3 viewDirTS = GetViewDirectionTangentSpace(input.tangentWS, normalWS, viewDirWS);   // In ParallaxMapping.hlsl
+
+    float2 uv = input.uv;
     uv += ParallaxMapping(TEXTURE2D_ARGS(_ParallaxMap, sampler_ParallaxMap), viewDirTS, _ParallaxStrength, uv);
-    // 颜色映射样例
+
+    // ===== [Part4] 颜色采样 + 程序化点阵镂空 + Alpha 裁切 =====
     float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, uv) * _ColorTint;
-    // 括号内的值小于0，直接把这个像素丢弃
-    // clip(colorSample.a * _ColorTint.a - 0.5);
-    
-    // -------程序化点阵镂空-------
-    // input.uv（原始 UV）-> 改用偏移后的 uv，即input.uv 改为 uv
-    colorSample.a = CalculateDotMatrix(uv, _DotDensity, _DotRadius, 
+
+    // 用偏移后的 uv 生成点阵，覆盖纹理 alpha
+    colorSample.a = CalculateDotMatrix(uv, _DotDensity, _DotRadius,
                                         float2(_DotScaleX, _DotScaleY));
 
     TestAlphaClip(colorSample);
 
-// 这里一直在写宏，看上去像是在优化性能
+    // ===== [Part3] 法线贴图（切线空间 → 世界空间）=====
 #ifdef _NORMALMAP
     float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, uv), _NormalStrength);
     // tangentToWorld 必须在守卫外计算，否则渲染调试器的 "Lighting Without Normal Maps" 模式会出错
     float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
     normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
 #else
-    float3 normalTS = float3(0, 0, 1); // 默认平法线，_NORMALMAP 未启用时给调试器兜底
-    float3x3 tangentToWorld = float3x3(1,0,0, 0,1,0, 0,0,1);
+    float3 normalTS = float3(0, 0, 1);  // 默认平法线，_NORMALMAP 未启用时给调试器兜底
+    float3x3 tangentToWorld = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
     normalWS = normalize(normalWS);
 #endif
 
-    // return float4(normalWS * 0.5 + 0.5, 1);  // 测试法线贴图，旋转模型法线应跟着走
-    // return float4((normalWS + 1) * 0.5, 1); // 向量重映射
+    // ===== [Part5] 填充 lightingInput =====
     InputData lightingInput = (InputData)0;
     lightingInput.positionWS = input.positionWS;
-    // 设置世界空间法线，数据是走Interpolators来的，input接应了这个结构体
-    // lightingInput.normalWS = normalize(input.normalWS) * IS_FRONT_VFACE(frontFace, 1, -1);
-    // 守卫关键字会处理好条件翻转，这里直接传值就好了
-    lightingInput.normalWS = normalWS; // 之前干啥了：拿到viewDirWS给GetViewDirectionTangentSpace使用
-    lightingInput.viewDirectionWS = viewDirWS; // 之前干啥了：拿到viewDirTS用于UV偏移采样
-    // normalizedScreenSpaceUV = (0,0) 导致 SSAO 采样错误，把环境反射乘没了
+    lightingInput.normalWS = normalWS;
+    lightingInput.viewDirectionWS = viewDirWS;
     lightingInput.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
+    // normalizedScreenSpaceUV = (0,0) 会导致 SSAO 采样错误，把环境反射乘没
     lightingInput.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
     lightingInput.shadowMask = half4(1.0, 1.0, 1.0, 1.0);
 #if UNITY_VERSION >= 202120
     lightingInput.positionCS = input.positionCS;
-    // 调试法线贴图，会在渲染调试器中输出额外视图
-    lightingInput.tangentToWorld = tangentToWorld; // 提供转换矩阵
+    lightingInput.tangentToWorld = tangentToWorld;  // 渲染调试器需要，用于输出额外视图
 #endif
 
-// 修复：原来无条件调用SampleLightmap，它在LIGHTMAP_ON未定义时直接返回0
-// 导致使用光照探针的对象整体变黑，这里补了SH兜底
+    // ===== [Part5-二] 烘焙 GI：lightmap 或 SH 兜底 =====
+    // SampleLightmap 在 LIGHTMAP_ON 未定义时直接返回 0，
+    // 会让使用光照探针的对象整体变黑，所以这里补了 SH 兜底
 #ifdef LIGHTMAP_ON
-    // 光照贴图采样
     lightingInput.bakedGI = SampleLightmap(input.uv2, normalWS);
 #else
     lightingInput.bakedGI = SampleSHPixel(input.vertexSH, normalWS);
 #endif
 
-    // 调试：输出烘焙GI为灰度
+    // 调试：输出烘焙 GI 为灰度
     #ifdef _DEBUG_BAKED_GI
         return float4(lightingInput.bakedGI, 1);
     #endif
 
+    // ===== [Part3/4/5] 填充 SurfaceData =====
     SurfaceData surfaceInput = (SurfaceData)0;
-    surfaceInput.albedo = colorSample.rgb; //  * _ColorTint.rgb; // 98行已经乘过了
+    surfaceInput.albedo = colorSample.rgb;
     surfaceInput.alpha = colorSample.a * _ColorTint.a;
+
     #ifdef _SPECULAR_SETUP
+    // 高光工作流 [Part3]
     surfaceInput.specular = SAMPLE_TEXTURE2D(_SpecularMap, sampler_SpecularMap, uv).rgb * _SpecularTint;
     surfaceInput.metallic = 0;
     #else
+    // 金属度工作流（默认）[Part3]
     surfaceInput.specular = 1;
     surfaceInput.metallic = SAMPLE_TEXTURE2D(_MetalnessMask, sampler_MetalnessMask, uv).r * _Metalness;
     #endif
 
-    // 适配粗糙度roughness贴图（平滑度的反值）
-    float smoothnessSample = SAMPLE_TEXTURE2D(_SmoothnessMask, sampler_SmoothnessMask, uv).r; // * _Smoothness; // 第三回合，适配粗糙度模式，现在这个单拿出来后面乘
+    // 平滑度 / 粗糙度 [Part3]
+    float smoothnessSample = SAMPLE_TEXTURE2D(_SmoothnessMask, sampler_SmoothnessMask, uv).r;
     #ifdef _ROUGHNESS_SETUP
-    surfaceInput.smoothness = 1 - smoothnessSample; // 粗糙度模式：贴图白=粗糙，黑=光滑
+    surfaceInput.smoothness = 1 - smoothnessSample;         // 粗糙度模式：贴图白 = 粗糙，黑 = 光滑
     #else
-    surfaceInput.smoothness = smoothnessSample * _Smoothness; // 平滑度模式：滑条控制强度
+    surfaceInput.smoothness = smoothnessSample * _Smoothness;  // 平滑度模式：滑条控制强度
     #endif
-    // 拿到守卫关键字里面去处理了，适配平滑度模式
-    // surfaceInput.smoothness = smoothnessSample;
-    // surfaceInput.metallic = _Metalness;  // 这个值已经在采样时乘过去了，不需要再单独赋值了
-    // surfaceInput.smoothness = _Smoothness; // 同上
+
+    // 自发光 [Part4]
     surfaceInput.emission = SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, uv).rgb * _EmissionTint;
+
+    // 遮挡贴图（URP 惯例用 G 通道）[Part5-三]
 #ifdef _OCCLUSIONMAP
     surfaceInput.occlusion = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv).g * _OcclusionStrength;
 #else
-    // 如果以后想做AO，就采样一张Occlusion贴图，URP惯例用g通道
     surfaceInput.occlusion = 1.0;
 #endif
+
+    // 清漆 [Part4]
     #ifdef _CLEARCOATMAP
     surfaceInput.clearCoatMask = SAMPLE_TEXTURE2D(_ClearCoatMask, sampler_ClearCoatMask, uv).r * _ClearCoatStrength;
     surfaceInput.clearCoatSmoothness = SAMPLE_TEXTURE2D(_ClearCoatSmoothnessMask, sampler_ClearCoatSmoothnessMask, uv).r * _ClearCoatSmoothness;
-#endif
-    // 调试钩子，给 Unity 内部调试工具“喂数据”，不影响眼前的光照颜色
-    surfaceInput.normalTS = normalTS; // 提供原始切线法线
-    // 现在切PBR了，这里不需要了  最后再乘个色调
-// #if UNITY_VERSION >= 202120
-//     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput);
-// #else
-//     return UniversalFragmentBlinnPhong(lightingInput, surfaceInput.albedo, float4(surfaceInput.specular, 1), surfaceInput.smoothness, 0, surfaceInput.alpha );
-// #endif
-// 在片元函数中采样Cookie，定义了自己的BRDF需自己采样，还需加上
-// 获取主光源（带阴影坐标和AO）
-// Light mainLight = GetMainLight(lightingInput.shadowCoord, lightingInput.positionWS, half(1,1,1,1));
+    #endif
 
-// #ifdef _LIGHT_COCKIES
-//     // 主光源Cookie采样
-//     float4 cookiePos = TransformWorldToCookiePositionWS(input.positionWS, mainLight);
-//     float4 cookieSample = SAMPLE_TEXTURE2D(_MainLightCookieTexture, sampler_MainLightCookieTexture, cookiePos.xy).r;
-//     mainLight.color *= cookieSample; // 用Cookie调制光强
-// #endif
+    // 给 Unity 内部调试工具喂原始切线法线，不影响最终颜色
+    surfaceInput.normalTS = normalTS;
 
-//return half4(surfaceInput.occlusion.xxx, 1);
+    // ===== PBR 出最终颜色 =====
     return UniversalFragmentPBR(lightingInput, surfaceInput);
 }
 
-
 #endif
+
+// ==================== 调试片段（需要时临时挪到 Fragment 里）====================
+// uv 可视化：      return float4(uv, 0, 1);
+// 法线可视化：     return float4(normalWS * 0.5 + 0.5, 1);
+// 向量重映射：     return float4((normalWS + 1) * 0.5, 1);
+// 烘焙 GI 灰度：   return float4(lightingInput.bakedGI, 1);
+// 查看 AO：        return half4(surfaceInput.occlusion.xxx, 1);
+// ==========================================================================

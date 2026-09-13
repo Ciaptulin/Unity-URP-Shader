@@ -1,3 +1,4 @@
+// ===== [Part5-七] 深度 + 法线通道（SSAO / SSR 用）=====
 #ifndef MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
 #define MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
 
@@ -12,7 +13,8 @@ struct Attributes
     float2 uv : TEXCOORD0;
 };
 
-struct Varyings{
+struct Interpolators
+{
     float4 positionCS : SV_POSITION;
     float2 uv : TEXCOORD0;
     float3 normalWS : TEXCOORD1;
@@ -21,36 +23,37 @@ struct Varyings{
 #endif
 };
 
+Interpolators DepthNormalsVertex(Attributes input)
+{
+    Interpolators output = (Interpolators)0;
 
-Varyings DepthNormalsVertex(Attributes input){
-    Varyings output = (Varyings)0;
-
-    VertexNormalInputs normalInput = GetVertexNormalInputs(input.normalOS, input.tangentOS);
+    VertexNormalInputs normInputs = GetVertexNormalInputs(input.normalOS, input.tangentOS);
 
     output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
     output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
-    output.normalWS = normalInput.normalWS;
+    output.normalWS = normInputs.normalWS;
 
     #ifdef _NORMALMAP
-        // GetOddNegativeScale处理负缩放翻转，不能省
+        // GetOddNegativeScale 处理负缩放翻转，不能省
         real sign = input.tangentOS.w * GetOddNegativeScale();
-        output.tangentWS = half4(normalInput.tangentWS.xyz, sign);
+        output.tangentWS = half4(normInputs.tangentWS.xyz, sign);
     #endif
 
     return output;
 }
 
-half4 DepthNormalsFragment(Varyings input) : SV_TARGET{
+half4 DepthNormalsFragment(Interpolators input) : SV_TARGET
+{
     #ifdef _NORMALMAP
         half3 normalTS = UnpackNormalScale(
             SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, input.uv),
             _NormalStrength);
 
-        // 注意这里顺序是 tangent/bitangent/normal
+        // 注意顺序是 tangent / bitangent / normal
         half sgn = input.tangentWS.w;
         half3 bitangent = sgn * cross(input.normalWS.xyz, input.tangentWS.xyz);
         half3 normalWS = TransformTangentToWorld(
-            normalTS, 
+            normalTS,
             half3x3(input.tangentWS.xyz, bitangent, input.normalWS.xyz));
     #else
         half3 normalWS = input.normalWS;
@@ -61,7 +64,9 @@ half4 DepthNormalsFragment(Varyings input) : SV_TARGET{
                                         float2(_DotScaleX, _DotScaleY));
         clip(alpha - _Cutoff);
     #endif
-    // 发现必须归一化，否则SSAO会出现错误遮挡
+
+    // 必须归一化，否则插值后的法线长度 < 1，会让 SSAO 半球采样方向偏斜
     return half4(NormalizeNormalPerPixel(normalWS), 0.0);
 }
+
 #endif

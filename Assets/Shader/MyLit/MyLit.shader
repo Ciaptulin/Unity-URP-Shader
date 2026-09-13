@@ -1,11 +1,12 @@
 Shader "Custom/MyLit"
 {
-    Properties{
+    Properties
+    {
         [Header(Surface options)]  // 创建文本头部
         // [MainTexture] and [MainColor] allow Material.mainTexture and Material.color to use the correct properties
         [MainTexture] _ColorMap("颜色贴图", 2D) = "white" {}
         [MainColor] _ColorTint("Tint", Color) = (1,1,1,1)
-        // 定义一个滑条，用来控制透明度裁切的阈值
+        // 透明度裁切阈值滑条
         [HideInInspector] _Cutoff("Alpha cutout threshold", Range(0,1)) = 0.5
         [NoScaleOffset][Normal] _NormalMap("Normal", 2D) = "bump" {}
         _NormalStrength("Normal strength", Range(0, 1)) = 1
@@ -27,9 +28,9 @@ Shader "Custom/MyLit"
         [NoScaleOffset] _ClearCoatSmoothnessMask("Clear coat smoothness mask", 2D) = "white" {}
         _ClearCoatSmoothness("Clear coat smoothness", Range(0,1)) = 0
 
+        // 程序化点阵镂空
         _DotDensity("Dot Density", Float) = 10
         _DotRadius("Dot Radius", Range(0,0.5)) = 0.2
-        
         _DotScaleX("Dot Scale X", Range(0.1, 5)) = 1
         _DotScaleY("Dot Scale Y", Range(0.1, 5)) = 1
 
@@ -39,9 +40,7 @@ Shader "Custom/MyLit"
         [NoScaleOffset] _OcclusionMap("遮挡贴图", 2D) = "white" {}
         _OcclusionStrength("遮挡强度", Range(0,1)) = 1
 
-
-        // [Enum(UnityEngine.Rendering.CullMode)] _Cull("Cull mode", Float) = 2
-        // 替换原本的枚举属性，枚举交由代码处理
+        // 以下由自定义 Inspector 控制，不直接在面板显示
         [HideInInspector] _Cull("Cull mode", Float) = 2  // 2 is "Back"
         [HideInInspector] _SourceBlend("Source blend", Float) = 1
         [HideInInspector] _DestBlend("Destination blend", Float) = 0
@@ -54,147 +53,149 @@ Shader "Custom/MyLit"
         [HideInInspector][NoScaleOffset] unity_Lightmaps("unity_Lightmaps", 2DArray) = "" {}
         [HideInInspector][NoScaleOffset] unity_LightmapsInd("unity_LightmapsInd", 2DArray) = "" {}
         [HideInInspector][NoScaleOffset] unity_ShadowMasks("unity_ShadowMasks", 2DArray) = "" {}
-
-
-        
     }
-    SubShader{
+
+    SubShader
+    {
         Tags{"RenderPipeline" = "UniversalPipeline" "RenderType" = "Opaque" }
 
-        // ColorMask 0
-        
-        Pass{
-        Name "ForwardLit" // For debugging
-        Tags{"LightMode" = "UniversalForward"}
+        // ===== Pass 1: 前向光照主体 [Part2 → Part5] =====
+        Pass
+        {
+            Name "ForwardLit"  // For debugging
+            Tags{"LightMode" = "UniversalForward"}
 
-        // Blend SrcAlpha OneMinusSrcAlpha
-        // ZWrite Off
-        // 从写死替换为方括号引用属性值，解决材质选择为不透明的情况下，会出现材质未被渲染的情况
-        Blend [_SourceBlend] [_DestBlend]
-        ZWrite [_ZWrite]
-        Cull[_Cull]
-        HLSLPROGRAM // Begin HLSL code
-            // #define _SPECULAR_COLOR // 切换为 PBR，默认包含镜面高光，此部分不再需要
-            //#define _NORMALMAP
+            // 引用属性值而非写死，解决不透明材质未渲染的问题
+            Blend [_SourceBlend] [_DestBlend]
+            ZWrite [_ZWrite]
+            Cull[_Cull]
+
+            HLSLPROGRAM
+            // 材质特性关键字（按需编译）
             #pragma shader_feature_local_fragment _NORMALMAP
-            // #define _CLEARCOATMAP
             #pragma shader_feature_local _CLEARCOATMAP
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
-            // #define _SPECULAR_SETUP // 设置了Toggle属性，这里被变体替换
             #pragma shader_feature_local_fragment _SPECULAR_SETUP
-            // 这里我主动适配了粗糙度贴图
             #pragma shader_feature_local_fragment _ROUGHNESS_SETUP
             #pragma shader_feature_local_fragment _ALPHAPREMULTIPLY_ON
 
+            // 主光源阴影
 #if UNITY_VERSION >= 202120
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
 #else
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
 #endif
-            #pragma multi_compile_fragment _ _SHADOWS_SOFT // 只影响片元
-            // 添加附加光源支持
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT  // 只影响片元
+
+            // 附加光源 [Part5-一]
             #pragma multi_compile _ _ADDITIONAL_LIGHTS
             #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
-            
-            // Cookie支持
+
+            // 光源 Cookie [Part5-五]
             #pragma multi_compile _ _MAIN_LIGHT_COOKIE
             #pragma multi_compile _ _ADDITIONAL_LIGHTS_COOKIE
 
-            // 反射探针混合与盒投影
+            // 反射探针 [Part5-四]
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
             // 光源层级
             #pragma multi_compile_fragment _ _LIGHT_LAYERS
-            // 屏幕空间遮挡
+            // 屏幕空间遮挡 [Part5-三]
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
 
-            // Unity defined keywords - 烘焙光照必须
+            // Unity 内置关键字 - 烘焙光照必须 [Part5-二]
             #pragma multi_compile _ DIRLIGHTMAP_COMBINED
             #pragma multi_compile _ LIGHTMAP_ON
             #pragma multi_compile _ DYNAMICLIGHTMAP_ON
             #pragma multi_compile _ LIGHTMAP_SHADOW_MIXING
             #pragma multi_compile _ SHADOWS_SHADOWMASK
-            // 加了 [Toggle(_EMISSION)] 属性，声明一下
             #pragma shader_feature_local_fragment _EMISSION
             #pragma shader_feature_local_fragment _OCCLUSIONMAP
-            // 光源cookie
-//            #pragma multi_compile _ _LIGHT_COOKIES
 
-            // 光照探针SH评估  当前没用到
-            // #pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
-
-            // 调试：输出烘焙GI为灰度
+            // 调试：输出烘焙 GI 为灰度 [Part5-六]
             #pragma multi_compile _ _DEBUG_BAKED_GI
 
 #if UNITY_VERSION >= 202120
             #pragma multi_compile_fragment _ DEBUG_DISPLAY
 #endif
+
             // Register our programmable stage functions
             #pragma vertex Vertex
             #pragma fragment Fragment
 
             // Include our code file
             #include "MyLitForwardLitPass.hlsl"
-        ENDHLSL
+            ENDHLSL
         }
-        Pass{
-        Name "ShadowCaster" // For debugging
-        Tags{"LightMode" = "ShadowCaster"}
 
-        ColorMask 0
-        Cull[_Cull]
+        // ===== Pass 2: 阴影投射 [Part2] =====
+        Pass
+        {
+            Name "ShadowCaster"  // For debugging
+            Tags{"LightMode" = "ShadowCaster"}
 
-        HLSLPROGRAM // Begin HLSL code
-            // Register our programmable stage functions
+            ColorMask 0
+            Cull[_Cull]
+
+            HLSLPROGRAM
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
 
             #pragma vertex Vertex
             #pragma fragment Fragment
 
-            // Include our code file
             #include "MyLitShadowCasterPass.hlsl"
-        ENDHLSL
+            ENDHLSL
         }
-        Pass{
+
+        // ===== Pass 3: 光照烘焙元通道 [Part5-二] =====
+        Pass
+        {
             Name "Meta"
             Tags{"LightMode" = "Meta"}
             Cull Off
+
             HLSLPROGRAM
             #pragma target 2.0
             #pragma vertex Vertex
             #pragma fragment Fragment
             #pragma shader_feature_local_fragment _SPECULAR_SETUP
-            #pragma shader_feature_local_fragment _EMISSION 
+            #pragma shader_feature_local_fragment _EMISSION
             #pragma shader_feature_local_fragment _ALPHA_CUTOUT
             #include "MyLitMetaPass.hlsl"
             ENDHLSL
         }
-        Pass{
+
+        // ===== Pass 4: 仅深度 [Part2 附近] =====
+        Pass
+        {
             Name "DepthOnly"
             Tags{"LightMode" = "DepthOnly"}
 
-            ZWrite On 
+            ZWrite On
             ColorMask 0
             Cull [_Cull]
 
             HLSLPROGRAM
-            #pragma exclude_renderers gles gles3 glcore 
+            #pragma exclude_renderers gles gles3 glcore
             #pragma target 4.5
 
             #pragma vertex DepthOnlyVertex
             #pragma fragment DepthOnlyFragment
 
-            // 关键：ShadowCasteer里有，这里也必须同步
+            // 关键：ShadowCaster 里有，这里也必须同步
             #pragma shader_feature_local _ALPHA_CUTOUT
             #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
 
             #include "MyLitDepthOnlyPass.hlsl"
             ENDHLSL
         }
-        Pass{
+
+        // ===== Pass 5: 深度 + 法线 [Part5-七] =====
+        Pass
+        {
             Name "DepthNormals"
             Tags{"LightMode" = "DepthNormals"}
 
