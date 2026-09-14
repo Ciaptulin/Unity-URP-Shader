@@ -2276,236 +2276,440 @@ _<font style="color:rgb(51, 51, 51);">Rendering Debugger 中的光照调试视�
 
 ---
 
-## <font style="color:rgb(51, 51, 51);">七、补充 Pass：深度法线与运动向量</font>
-<font style="color:rgb(51, 51, 51);">我们的着色器目前只有 ForwardLit 和 ShadowCaster 两个 Pass。为了支持屏幕空间效果（如 SSAO、运动模糊），我们需要添加两个额外的 Pass。</font>
+## 七、补充 Pass：深度法线与运动向量
 
-### <font style="color:rgb(51, 51, 51);">DepthNormals Pass</font>
-**<font style="color:rgb(167, 167, 167);"></font>****<font style="color:rgb(51, 51, 51);">DepthNormals Pass</font>**<font style="color:rgb(51, 51, 51);"> 将场景的深度和法线信息渲染到一张纹理中。这张纹理被以下效果使用：</font>
+前六个小节让 ForwardLit Pass 拥有了完整的光照能力，但屏幕空间后效（SSAO、运动模糊、TAA）需要**额外的几何数据**：深度、法线、运动向量。这些数据由独立的 Pass 渲染到单独的纹理里。
 
-+ **<font style="color:rgb(51, 51, 51);">SSAO（屏幕空间环境光遮蔽）</font>**<font style="color:rgb(51, 51, 51);">：需要知道每个像素的法线方向来计算遮挡关系</font>
-+ **<font style="color:rgb(51, 51, 51);">运动模糊</font>**<font style="color:rgb(51, 51, 51);">：需要深度信息来判断物体的运动范围</font>
-+ **<font style="color:rgb(51, 51, 51);">屏幕空间反射（SSR）</font>**<font style="color:rgb(51, 51, 51);">：需要法线信息来计算反射方向</font>
+本节为 MyLit 添加两个 Pass：
 
-<font style="color:rgb(51, 51, 51);">在 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLit.shader</font>`<font style="color:rgb(51, 51, 51);"> 的 SubShader 中添加 DepthNormals Pass：</font>
++ **DepthNormals Pass**：输出深度 + 世界空间法线（SSAO / SSR 用）
++ **MotionVectors Pass**：输出屏幕空间运动向量（运动模糊 / TAA 用）
+
+---
+
+### 7.1 DepthNormals Pass
+
+#### 它输出什么
+
++ **深度**：不靠 shader 手写，`ZWrite On` 让光栅化阶段自动把裁剪空间 Z 写进深度缓冲
++ **法线**：片元返回世界空间法线，URP 把它渲进 `_CameraNormalsTexture`
+
+#### 为什么需要它
+
++ **SSAO**：需要每个像素的法线来计算半球采样方向
++ **SSR（屏幕空间反射）**：需要法线计算反射方向
++ **运动模糊**：需要深度判断物体运动范围
+
+#### MyLit.shader 中的 Pass 定义
 
 ```glsl
-Pass {
-  Name "DepthNormals"
-    Tags{"LightMode" = "DepthNormalsOnly"}
+// ===== Pass 5: 深度 + 法线 [Part5-七] =====
+Pass
+{
+    Name "DepthNormals"
+    Tags{"LightMode" = "DepthNormals"}
 
-  ZWrite On
-    Cull[_Cull]
+    ZWrite On
+    Cull [_Cull]
 
     HLSLPROGRAM
-    #pragma shader_feature_local _NORMALMAP
+    #pragma exclude_renderers gles gles3 glcore
+    #pragma target 4.5
+
+    #pragma vertex DepthNormalsVertex
+    #pragma fragment DepthNormalsFragment
+
+    #pragma shader_feature_local _ALPHA_CUTOUT
     #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
+    #pragma shader_feature_local_fragment _NORMALMAP
+
+    #include "MyLitDepthNormalsPass.hlsl"
+    ENDHLSL
+}
+```
+
+**关键点**：
+
++ `LightMode` 用 `"DepthNormals"`（URP 内置 Lit 的写法），**不是** `"DepthNormalsOnly"`。后者是 HDRP 的用法，在 URP 里会导致 Pass 不被识别
++ 需要同步 `_ALPHA_CUTOUT` / `_DOUBLE_SIDED_NORMALS` / `_NORMALMAP` 三个关键字，才能和 ForwardLit 的镂空、双面法线、法线贴图表现一致
+
+#### MyLitDepthNormalsPass.hlsl
+
+```glsl
+// ===== [Part5-七] 深度 + 法线通道（SSAO / SSR 用）=====
+#ifndef MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
+#define MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
+
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+#include "MyLitCommon.hlsl"
+
+struct Attributes
+{
+    float4 positionOS : POSITION;
+    float3 normalOS : NORMAL;
+    float4 tangentOS : TANGENT;
+    float2 uv : TEXCOORD0;
+};
+
+struct Interpolators
+{
+    float4 positionCS : SV_POSITION;
+    float2 uv : TEXCOORD0;
+    float3 normalWS : TEXCOORD1;
+#ifdef _NORMALMAP
+    float4 tangentWS : TEXCOORD2;
+#endif
+};
+
+Interpolators DepthNormalsVertex(Attributes input)
+{
+    Interpolators output = (Interpolators)0;
+
+    VertexNormalInputs normInputs = GetVertexNormalInputs(input.normalOS, input.tangentOS);
+
+    output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+    output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
+    output.normalWS = normInputs.normalWS;
+
+    #ifdef _NORMALMAP
+        // GetOddNegativeScale 处理负缩放翻转，不能省
+        real sign = input.tangentOS.w * GetOddNegativeScale();
+        output.tangentWS = half4(normInputs.tangentWS.xyz, sign);
+    #endif
+
+    return output;
+}
+
+half4 DepthNormalsFragment(Interpolators input) : SV_TARGET
+{
+    #ifdef _NORMALMAP
+        half3 normalTS = UnpackNormalScale(
+            SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, input.uv),
+            _NormalStrength);
+
+        // 注意顺序是 tangent / bitangent / normal
+        half sgn = input.tangentWS.w;
+        half3 bitangent = sgn * cross(input.normalWS.xyz, input.tangentWS.xyz);
+        half3 normalWS = TransformTangentToWorld(
+            normalTS,
+            half3x3(input.tangentWS.xyz, bitangent, input.normalWS.xyz));
+    #else
+        half3 normalWS = input.normalWS;
+    #endif
+
+    #ifdef _ALPHA_CUTOUT
+        half alpha = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius,
+                                        float2(_DotScaleX, _DotScaleY));
+        clip(alpha - _Cutoff);
+    #endif
+
+    // 必须归一化，否则插值后的法线长度 < 1，会让 SSAO 半球采样方向偏斜
+    return half4(NormalizeNormalPerPixel(normalWS), 0.0);
+}
+
+#endif
+```
+
+#### 与本教程示例的三处差异
+
+1. **法线输出格式**
+
+   教程示例返回 `normalWS * 0.5 + 0.5`（把 -1~1 映射到 0~1）。**这个在 URP 里不是必需的**：URP 的 `_CameraNormalsTexture` 是带符号格式（SNorm），可以直接存 -1~1 的法线。URP 内置 Lit 的 `DepthNormalsFragment` 就是直接返回 `NormalizeNormalPerPixel(normalWS)`，本项目与官方一致。
+
+2. **TBN 构建方式**
+
+   项目在 `_NORMALMAP` 守卫内才传 `tangentWS`，片元里手写 `cross` 构造 TBN。这和 URP 提供的 `CreateTangentToWorld` 等价，但更省：没法线贴图时省一个插值器。
+
+3. **法线归一化**
+
+   `NormalizeNormalPerPixel(normalWS)` 不能省。插值后法线长度会小于 1，不归一化会让 SSAO 的半球采样方向出现明显偏差。
+
+---
+
+### 7.2 MotionVectors Pass
+
+#### 它输出什么
+
+每个像素在**屏幕空间**上从上一帧到当前帧移动了多少。后处理（运动模糊、TAA）用它判断像素应该往哪个方向拖影。
+
+#### 核心原理
+
+一个像素的运动 = **当前帧 NDC 位置 − 上一帧 NDC 位置**。
+
+当前帧位置手上有（`positionCS`），上一帧位置需要**用当前世界坐标乘上一帧的视图投影矩阵重新投影**。
+
+#### 与教程示例的关键差异（重要）
+
+教程示例是**教学简化版**，直接用会导致编译错误或效果异常。URP 16 的正确做法：
+
+| 项 | 教程示例 | URP 16 正确写法 |
+|---|---|---|
+| 上一帧视图投影矩阵 | `_PrevViewProjM` ❌ 不存在 | `_PrevViewProjMatrix` |
+| 当前帧矩阵 | 用 `positionCS` 直接算 | 需要 `_NonJitteredViewProjMatrix`（非抖动） |
+| 上一帧物体矩阵 | 未提 | `UNITY_PREV_MATRIX_M`（物体自身的历史位置） |
+| 输出格式 | `float4(ndc, 0, 1)` | `float4(velocity, 0, 0)`，用 URP 辅助函数处理 |
+| 关键字 | 未提 | 无需 `_MOTION_VECTORS`，靠 `#include_with_pragmas` 或显式 pragma |
+
+#### MyLit.shader 中的 Pass 定义
+
+```glsl
+// ===== Pass 6: 运动向量 [Part5-七] =====
+Pass
+{
+    Name "MotionVectors"
+    Tags{"LightMode" = "MotionVectors"}
+
+    ColorMask RG        // 只写 RG，B/A 留 0
+
+    HLSLPROGRAM
+    #pragma target 3.5
     #pragma shader_feature_local _ALPHA_CUTOUT
 
     #pragma vertex Vertex
     #pragma fragment Fragment
 
-    #include "MyLitDepthNormalsPass.hlsl"
+    #include "MyLitMotionVectorPass.hlsl"
     ENDHLSL
-  }
-```
-
-<font style="color:rgb(51, 51, 51);">在 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLit.shader</font>`<font style="color:rgb(51, 51, 51);"> 的 SubShader 中添加 DepthNormals Pass，位于 ShadowCaster Pass 之后。</font>
-
-<font style="color:rgb(51, 51, 51);">创建新文件 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLitDepthNormalsPass.hlsl</font>`<font style="color:rgb(51, 51, 51);">：</font>
-
-```glsl
-#ifndef MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
-#define MY_LIT_DEPTH_NORMALS_PASS_INCLUDED
-
-#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-#include "MyLitCommon.hlsl"
-
-struct Attributes {
-  float3 positionOS : POSITION;
-  float3 normalOS : NORMAL;
-  float4 tangentOS : TANGENT;
-  float2 uv : TEXCOORD0;
-};
-
-struct Interpolators {
-  float4 positionCS : SV_POSITION;
-  float2 uv : TEXCOORD0;
-  float3 normalWS : TEXCOORD1;
-  float4 tangentWS : TEXCOORD2;
-};
-
-Interpolators Vertex(Attributes input) {
-  Interpolators output;
-
-  VertexPositionInputs posnInputs = GetVertexPositionInputs(input.positionOS);
-  VertexNormalInputs normInput = GetVertexNormalInputs(input.normalOS, input.tangentOS);
-
-  output.positionCS = posnInputs.positionCS;
-  output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
-  output.normalWS = normInput.normalWS;
-  output.tangentWS = float4(normInput.tangentWS, input.tangentOS.w);
-
-  return output;
 }
-
-float4 Fragment(Interpolators input
-                #ifdef _DOUBLE_SIDED_NORMALS
-                , FRONT_FACE_TYPE frontFace : FRONT_FACE_SEMANTIC
-                #endif
-               ) : SV_TARGET {
-  // Alpha 裁剪
-  float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, input.uv) * _ColorTint;
-  TestAlphaClip(colorSample);
-
-  // 计算世界空间法线
-  float3 normalWS = normalize(input.normalWS);
-  #ifdef _DOUBLE_SIDED_NORMALS
-  normalWS *= IS_FRONT_VFACE(frontFace, 1, -1);
-  #endif
-
-  // 应用法线贴图
-  #ifdef _NORMALMAP
-  float3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, input.uv), _NormalStrength);
-  float3x3 tangentToWorld = CreateTangentToWorld(normalWS, input.tangentWS.xyz, input.tangentWS.w);
-  normalWS = normalize(TransformTangentToWorld(normalTS, tangentToWorld));
-  #endif
-
-  // 将法线编码到 0-1 范围并输出
-  // 深度缓冲区会自动存储裁剪空间位置的 Z 分量
-  return float4(normalWS * 0.5 + 0.5, 1);
-}
-
-#endif
 ```
 
-<font style="color:rgb(51, 51, 51);">DepthNormals Pass 的代码与前向光照 Pass 类似，但更简单：</font>
+**关键点**：
 
-1. <font style="color:rgb(51, 51, 51);">计算世界空间法线</font>
-2. <font style="color:rgb(51, 51, 51);">应用法线贴图（如果有）</font>
-3. <font style="color:rgb(51, 51, 51);">将法线编码到 0-1 范围并输出</font>
++ `ColorMask RG`：运动向量是二维（UV offset），只占 RG 通道
++ `LightMode` 用 `"MotionVectors"`：这个关键字是 Unity 内建约定，URP 渲染器会据此识别
 
-<font style="color:rgb(167, 167, 167);"></font><font style="color:rgb(119, 119, 119);">注意：深度缓冲区会自动存储裁剪空间位置的 Z 分量，所以我们不需要额外处理深度信息。法线信息通过颜色缓冲区输出。</font>
-
-### <font style="color:rgb(51, 51, 51);">MotionVectors Pass</font>
-**<font style="color:rgb(167, 167, 167);"></font>****<font style="color:rgb(51, 51, 51);">MotionVectors Pass</font>**<font style="color:rgb(51, 51, 51);"> 渲染运动向量纹理，用于运动模糊效果。它记录了每个像素从上一帧到当前帧的位移。</font>
-
-<font style="color:rgb(51, 51, 51);">在 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLit.shader</font>`<font style="color:rgb(51, 51, 51);"> 的 SubShader 中添加 MotionVectors Pass：</font>
+#### MyLitMotionVectorPass.hlsl
 
 ```glsl
-Pass {
-  Name "MotionVectors"
-    Tags{"LightMode" = "MotionVectors"}
-
-  ZWrite On
-    Cull[_Cull]
-
-    HLSLPROGRAM
-    #pragma shader_feature_local _DOUBLE_SIDED_NORMALS
-
-    #pragma vertex Vertex
-    #pragma fragment Fragment
-
-    #include "MyLitMotionVectorsPass.hlsl"
-    ENDHLSL
-  }
-```
-
-<font style="color:rgb(51, 51, 51);">在 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLit.shader</font>`<font style="color:rgb(51, 51, 51);"> 的 SubShader 中添加 MotionVectors Pass，位于 DepthNormals Pass 之后。</font>
-
-<font style="color:rgb(51, 51, 51);">创建新文件 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLitMotionVectorsPass.hlsl</font>`<font style="color:rgb(51, 51, 51);">：</font>
-
-```glsl
+// ===== [Part5-七] 运动向量通道（运动模糊 / TAA 用）=====
 #ifndef MY_LIT_MOTION_VECTORS_PASS_INCLUDED
 #define MY_LIT_MOTION_VECTORS_PASS_INCLUDED
 
-#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/UnityInput.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MotionVectorsCommon.hlsl"
 #include "MyLitCommon.hlsl"
 
-struct Attributes {
-  float3 positionOS : POSITION;
-  float3 normalOS : NORMAL;
-  float4 tangentOS : TANGENT;
-  float2 uv : TEXCOORD0;
+struct Attributes
+{
+    float4 positionOS : POSITION;
+#ifdef _ALPHA_CUTOUT
+    float2 uv : TEXCOORD0;
+#endif
 };
 
-struct Interpolators {
-  float4 positionCS : SV_POSITION;
-  float2 uv : TEXCOORD0;
-  float3 positionWS : TEXCOORD1;
+struct Interpolators
+{
+    float4 positionCS : SV_POSITION;
+    float4 positionCSNoJitter : POSITION_CS_NO_JITTER;
+    float4 previousPositionCSNoJitter : PREV_POSITION_CS_NO_JITTER;
+#ifdef _ALPHA_CUTOUT
+    float2 uv : TEXCOORD0;
+#endif
 };
 
-float4x4 _PrevViewProjM;
+Interpolators Vertex(Attributes input)
+{
+    Interpolators output = (Interpolators)0;
+    VertexPositionInputs vpInputs = GetVertexPositionInputs(input.positionOS.xyz);
 
-Interpolators Vertex(Attributes input) {
-  Interpolators output;
+    // 抖动位置（光栅化用）
+    output.positionCS = vpInputs.positionCS;
 
-  VertexPositionInputs posnInputs = GetVertexPositionInputs(input.positionOS);
+    // 当前帧非抖动位置：当前 M + 非抖动 VP
+    output.positionCSNoJitter = mul(_NonJitteredViewProjMatrix, mul(UNITY_MATRIX_M, input.positionOS));
 
-  output.positionCS = posnInputs.positionCS;
-  output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
-  output.positionWS = posnInputs.positionWS;
+    // 上一帧位置：上一帧 M + 上一帧 VP
+    float4 prevPos = input.positionOS;
+    output.previousPositionCSNoJitter = mul(_PrevViewProjMatrix, mul(UNITY_PREV_MATRIX_M, prevPos));
 
-  return output;
+    // 防运动向量纹理缝隙（必须在 positionCS 赋值之后）
+    ApplyMotionVectorZBias(output.positionCS);
+
+    #ifdef _ALPHA_CUTOUT
+    output.uv = TRANSFORM_TEX(input.uv, _ColorMap);
+    #endif
+
+    return output;
 }
 
-float4 Fragment(Interpolators input) : SV_TARGET {
-  // 计算当前帧的 NDC 坐标
-  float2 currentPosNDC = input.positionCS.xy / input.positionCS.w;
+float4 Fragment(Interpolators input) : SV_TARGET
+{
+    #ifdef _ALPHA_CUTOUT
+    float4 colorSample = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, input.uv);
+    colorSample.a = CalculateDotMatrix(input.uv, _DotDensity, _DotRadius, float2(_DotScaleX, _DotScaleY));
+    TestAlphaClip(colorSample);
+    #endif
 
-  // 计算上一帧的 NDC 坐标
-  float4 prevPos = mul(_PrevViewProjM, float4(input.positionWS, 1.0));
-  float2 prevPosNDC = prevPos.xy / prevPos.w;
-
-  // 运动向量 = 当前位置 - 上一帧位置
-  float2 motionVector = currentPosNDC - prevPosNDC;
-
-  return float4(motionVector, 0, 1);
+    // CalcNdcMotionVectorFromCsPositions 来自 MotionVectorsCommon.hlsl
+    float2 velocity = CalcNdcMotionVectorFromCsPositions(input.positionCSNoJitter, input.previousPositionCSNoJitter);
+    return float4(velocity, 0, 0);
 }
-
 #endif
 ```
 
-<font style="color:rgb(167, 167, 167);"><font style="color:#117CEE;"></font><font style="color:rgb(119, 119, 119);">注意：</font>`<font style="color:rgb(119, 119, 119);background-color:rgb(243, 244, 244);">_PrevViewProjM</font>`<font style="color:rgb(119, 119, 119);"> 是 URP 自动提供的上一帧的视图投影矩阵。在大多数情况下，你不需要手动设置它。</font>
+---
 
-### <font style="color:rgb(51, 51, 51);">实际项目修改</font>
-**<font style="color:rgb(51, 51, 51);">MyLit.shader</font>**<font style="color:rgb(51, 51, 51);"> — 在 ShadowCaster Pass 之后添加两个新 Pass：</font>
+### 7.3 学习总结：运动向量背后的三个知识模块
 
-```glsl
-// 在 MyLit.shader 的 SubShader 中
-// 位于 ShadowCaster Pass 之后添加
-Pass {
-  Name "DepthNormals" 
-  Tags{"LightMode" = "DepthNormalsOnly"}
-  ZWrite On
-    Cull[_Cull]
-    HLSLPROGRAM
-    #pragma shader_feature_local _NORMALMAP 
-    #pragma shader_feature_local _DOUBLE_SIDED_NORMALS 
-    #pragma shader_feature_local _ALPHA_CUTOUT 
-    #pragma vertex Vertex 
-    #pragma fragment Fragment 
-    #include "MyLitDepthNormalsPass.hlsl" 
-    ENDHLSL
-  }
-Pass { 
-  Name "MotionVectors" 
-  Tags{"LightMode" = "MotionVectors"}
-  ZWrite On Cull[_Cull] HLSLPROGRAM 
-    #pragma shader_feature_local _DOUBLE_SIDED_NORMALS 
-    #pragma vertex Vertex 
-    #pragma fragment Fragment 
-    #include "MyLitMotionVectorsPass.hlsl" 
-    ENDHLSL
-  }
+这一节的代码只有十几行，但每一行背后都依赖一块前置知识。以下是补课内容，方便日后回查。
+
+#### 模块 1：齐次坐标 / NDC / 透视除法
+
+**核心公式**：
+
+```
+对象空间 --[M]--> 世界空间 --[VP]--> 裁剪空间 (x,y,z,w) --[÷w]--> NDC --[映射]--> 屏幕像素
 ```
 
+**必须记住的三件事**：
 
+1. **w 携带深度**。`w_clip = -z_eye`，相机前方的点 w > 0，相机背后的点 w < 0，相机原点 w = 0
+2. **看到 NDC 先除以 w**。裁剪空间 `(x,y,z,w)` 除以 w 才得到 NDC `(x/w, y/w, z/w)`
+3. **NDC ≠ UV**。NDC 原点在屏幕中心、范围 [-1,1]；UV 原点在角、范围 [0,1]
 
-<font style="color:rgb(51, 51, 51);">同时创建两个新文件：</font>
+**投影矩阵第三、四行的来历**：
 
-+ `<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLitDepthNormalsPass.hlsl</font>`<font style="color:rgb(51, 51, 51);">（代码如上）</font>
-+ `<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">MyLitMotionVectorsPass.hlsl</font>`<font style="color:rgb(51, 51, 51);">（代码如上）</font>
+投影矩阵的最后两行是：
+
+```
+[ 0  0  A  B ]
+[ 0  0 -1  0 ]
+```
+
++ 第四行的 `-1` 负责生成 w（`w_clip = -z_eye`），透视除法由此产生"近大远小"
++ 第三行的 `A, B` 负责深度重映射。用"近平面映射到 NDC z 一端、远平面映射到另一端"两个边界条件可解出（OpenGL 约定）：
+
+```
+A = -(far + near) / (far - near)
+B = -2 * far * near / (far - near)
+```
+
+**关键结论**：裁剪空间 z 只是参与深度比较的中间量，它**不直接对应距离**。想知道点多远，看 w（即 z_eye），不看 z_clip。
+
+#### 模块 2：URP 内置矩阵体系
+
+顶点从对象空间到裁剪空间只有两跳：`对象 --[M]--> 世界 --[VP]--> 裁剪`。URP 为了省事，把 View 和 Projection 合并成 `_ViewProjMatrix` 系列。
+
+**运动向量需要的四个矩阵**：
+
+| 矩阵 | 含义 | 用途 |
+|---|---|---|
+| `UNITY_MATRIX_M` | 当前帧，物体 → 世界 | 当前世界位置 |
+| `UNITY_PREV_MATRIX_M` | **上一帧**，物体 → 世界 | 物体自身的历史位置 |
+| `_NonJitteredViewProjMatrix` | 当前帧，世界 → 裁剪（**无抖动**） | 当前帧屏幕位置 |
+| `_PrevViewProjMatrix` | 上一帧，世界 → 裁剪 | 上一帧屏幕位置 |
+
+**为什么要两套位置（当前 vs 上一帧）**：
+
++ 相机和物体的运动是**两条独立的自由度**。`_PrevViewProjMatrix` 管相机的历史，`UNITY_PREV_MATRIX_M` 管物体的历史，缺一不可
++ 如果只换 VP 而不换 M，物体自身的位移会被完全抹掉
+
+**`mul` 的读法**：
+
+```glsl
+mul(VP, mul(M, pos))
+//   ↑ 后作用      ↑ 先作用
+// 结果 = VP × M × pos
+```
+
+矩阵乘法满足结合律，所以 `VP × (M × pos) == (VP × M) × pos`。**读法是"最靠近顶点的先作用"**，和函数嵌套 `A(B(v))` 一致。
+
+**透视投影不可线性叠加**：
+
+正交投影下，相机运动 + 物体运动的屏幕位移可以拆分相加。透视投影下**不行**——因为除以 w 是非线性操作。这是"位移不可简单相加"的根本原因。
+
+#### 模块 3：TAA 抖动（Jitter）
+
+**TAA 原理**：跨帧采样。每帧让投影矩阵带一个亚像素抖动，让同一个物体在多帧里落在略有差异的像素位置，累积后边缘被磨平。
+
+**抖动的两个副作用**：
+
++ **光栅化必须用抖动位置**：否则 TAA 累积的采样点完全重叠，抗锯齿失效
++ **运动向量必须用非抖动位置**：否则速度图被"抖动伪位移"污染，TAA 会产生鬼影
+
+这就是为什么 `Interpolators` 里要传三个位置字段：
+
+| 字段 | 语义 | 是否参与光栅化 | 用途 |
+|---|---|---|---|
+| `positionCS` | `SV_POSITION` | ✅ 参与 | 决定像素画在哪 |
+| `positionCSNoJitter` | `POSITION_CS_NO_JITTER` | ❌ 不参与位置定位 | 算运动向量（当前帧） |
+| `previousPositionCSNoJitter` | `PREV_POSITION_CS_NO_JITTER` | ❌ 不参与位置定位 | 算运动向量（上一帧） |
+
+**`POSITION_CS_NO_JITTER` 的真实作用**：
+
++ 它**不参与"位置裁剪 + 像素定位"**（那是 `SV_POSITION` 的活儿）
++ 但它**仍然经历顶点 → 插值 → 片元**的完整管线
++ 用它而不用 `TEXCOORD`，是因为 `TEXCOORD` 常是 `half` 精度，小位移会被量化吃掉；而它是 `float` 精度
+
+**jitter 的量级认知**：jitter 是**亚像素级**（约 0.5 像素）。物体慢速运动时真实位移和 jitter 同量级，抖动位置算运动向量会严重污染；快速运动时污染相对小，但仍会累积成残影。**无论快慢，抖动位置算运动向量都是错的。**
+
+#### 模块 4：CalcNdcMotionVectorFromCsPositions 内部做了什么
+
+```
+裁剪空间位置 pair
+  │  ÷ w
+  ▼
+NDC pair
+  │  相减
+  ▼
+NDC 位移
+  │  1. y 翻转（如果 UNITY_UV_STARTS_AT_TOP）
+  │  2. * 0.5
+  ▼
+UV space offset  ← 存入 _MotionVectorTexture
+```
+
+**为什么要 `* 0.5`**：NDC 范围 [-1,1] 长度是 2，UV 范围 [0,1] 长度是 1，缩放比 = 1/2。位移转换时 `+0.5` 的平移项相减抵消，只剩缩放。
+
+**为什么要 y 翻转**：NDC 的 y 向上为正；但 D3D（Windows）的 UV 原点在左上、v 向下为正。`UNITY_UV_STARTS_AT_TOP` 宏为真时必须翻转，否则垂直方向的运动模糊方向会反。
+
+**为什么后处理要 UV space**：后处理采样历史帧用的是 UV（`SAMPLE_TEXTURE2D`），直接给 UV offset 最省事。
+
+#### 模块 5：ApplyMotionVectorZBias
+
+**作用**：把物体在裁剪空间的 z 往相机方向推一个极小量，防止运动向量纹理出现**缝隙**。
+
+**缝隙的成因**：GPU 光栅化对三角形边缘的像素归属判定存在边界情况，某些像素可能被相邻的所有三角形都判为"不属于"，导致 `_MotionVectorTexture` 上出现空洞。后处理读到空洞位置的垃圾值会算出错误位移。
+
+**实现原理**：
+
+```glsl
+#if defined(UNITY_REVERSED_Z)
+positionCS.z -= unity_MotionVectorsParams.z * positionCS.w;
+#else
+positionCS.z += unity_MotionVectorsParams.z * positionCS.w;
+#endif
+```
+
+**为什么乘 `positionCS.w`**：`positionCS.z` 是裁剪空间 z，透视除法后才是 NDC。要让 NDC 上变化固定量 `Δ`，分子必须加 `Δ * w`。乘 w 保证了**所有距离的物体偏移量透视一致**。
+
+**与 `ApplyShadowBias` 的对比**：
+
+| | ApplyShadowBias | ApplyMotionVectorZBias |
+|---|---|---|
+| 防什么 | Shadow acne（阴影自遮挡条纹） | MotionVector gaps（运动向量纹理缝隙）|
+| 偏移方向 | 沿光源方向 | 沿相机方向 |
+| 相同原理 | 都是"给深度加偏移" | 同左 |
+
+**注意**：删掉它通常不会立刻出问题，它是一道防御硬件边缘情况的保险。但如果开启 TAA，缝隙会每帧被历史累积放大成残影，那时它就很关键。
+
+---
+
+### 7.4 验证步骤
+
+写完两个 Pass 后，按下面顺序验证：
+
+1. **编译**：Unity Console 无报错（尤其注意 hlsl 结尾的 `#endif` 有没有漏）
+2. **Frame Debugger**：Window → Analysis → Frame Debugger，分别找到 `DepthNormals` 和 `MotionVectors` 两个 draw call，确认被绘制
+3. **DepthNormals 验证**：开 SSAO Renderer Feature，观察镂空处 / 凹凸处的遮挡是否正确；用 Rendering Debugger 的 Normal 视图对比
+4. **MotionVectors 验证**：开 URP 的 Motion Blur（Volume 里加 Motion Blur Override），物体快速移动时应出现拖影；若拖影为 0 或乱飞，检查矩阵用对没有
+
+**常见问题**：
+
++ 看不到 MotionVectors draw call → 检查 `LightMode` 标签是否为 `"MotionVectors"`
++ 拖影方向反了 → 检查 `UNITY_UV_STARTS_AT_TOP` 的处理（本项目直接调用 URP 辅助函数，已内置处理）
++ 编译报 `_PrevViewProjM undeclared` → 教程示例的旧名字，应改成 `_PrevViewProjMatrix`
 
 ---
 
