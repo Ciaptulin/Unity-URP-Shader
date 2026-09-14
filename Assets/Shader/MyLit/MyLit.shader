@@ -216,6 +216,25 @@ Shader "Custom/MyLit"
             #include "MyLitDepthNormalsPass.hlsl"
             ENDHLSL
         }
+
+        // ===== Pass 6: 运动向量 [Part5-七] =====
+        Pass
+        {
+            Name "MotionVectors"
+            Tags{"LightMode" = "MotionVectors"}
+
+            ColorMask RG        // 只写RG，B/A留0
+
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma shader_feature_local _ALPHA_CUTOUT
+
+            #pragma vertex Vertex
+            #pragma fragment Fragment
+
+            #include "MyLitMotionVectorPass.hlsl"
+            ENDHLSL
+        }
     }
     CustomEditor "MyLitCustomInspector"
 }
