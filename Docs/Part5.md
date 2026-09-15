@@ -2713,69 +2713,229 @@ positionCS.z += unity_MotionVectorsParams.z * positionCS.w;
 
 ---
 
-## <font style="color:rgb(51, 51, 51);">八、性能考虑</font>
-<font style="color:rgb(51, 51, 51);">添加这些光照功能后，着色器的性能开销会增加。以下是一些优化建议：</font>
+## 八、性能考虑
 
-### <font style="color:rgb(51, 51, 51);">1. 附加光源的性能影响量化</font>
-<font style="color:rgb(51, 51, 51);">每个附加光源对性能的影响包括：</font>
+前七节把功能都做完了。这一节不新增功能，只讲**取舍**——同一个 shader，怎么在"功能全"和"性能好"之间平衡。
 
-+ **<font style="color:rgb(51, 51, 51);">Draw Call</font>**<font style="color:rgb(51, 51, 51);">：每个附加光源增加 1 次 Draw Call（全屏四边形）</font>
-+ **<font style="color:rgb(51, 51, 51);">顶点计算</font>**<font style="color:rgb(51, 51, 51);">：Per Vertex 模式下，每个光源增加顶点级别的光照计算</font>
-+ **<font style="color:rgb(51, 51, 51);">像素计算</font>**<font style="color:rgb(51, 51, 51);">：Per Pixel 模式下，每个光源增加像素级别的光照计算（包括 BRDF、阴影、衰减）</font>
-+ **<font style="color:rgb(51, 51, 51);">带宽</font>**<font style="color:rgb(51, 51, 51);">：每个光源需要读取光源数据（位置、颜色、衰减）</font>
+---
 
-<font style="color:rgb(51, 51, 51);">在移动设备上，每个附加光源可能增加 </font>**<font style="color:rgb(51, 51, 51);">0.5-2ms</font>**<font style="color:rgb(51, 51, 51);"> 的渲染时间（取决于分辨率和 GPU）。建议移动端最多使用 1-2 个附加光源。</font>
+### 8.1 附加光源的性能影响
 
-### <font style="color:rgb(51, 51, 51);">2. shader_feature vs multi_compile 的选择策略</font>
-| **<font style="color:rgb(51, 51, 51);">指令</font>** | **<font style="color:rgb(51, 51, 51);">编译时机</font>** | **<font style="color:rgb(51, 51, 51);">适用场景</font>** |
-| :--- | :--- | :--- |
-| `<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">shader_feature</font>` | <font style="color:rgb(51, 51, 51);">只编译被实际使用的变体</font> | <font style="color:rgb(51, 51, 51);">材质级别的可选功能</font> |
-| `<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">multi_compile</font>` | <font style="color:rgb(51, 51, 51);">编译所有可能的变体</font> | <font style="color:rgb(51, 51, 51);">引擎级功能（光源、阴影等）</font> |
+每个附加光源的开销：
 
++ **Draw Call**：Per Pixel 模式下每个光源增加一次全屏 Pass
++ **顶点计算**：Per Vertex 模式下每个光源增加顶点级光照
++ **像素计算**：Per Pixel 模式下每个光源增加像素级 BRDF + 阴影 + 衰减
++ **带宽**：读取光源数据（位置、颜色、衰减）
 
-<font style="color:rgb(51, 51, 51);">对于材质级别的功能（如法线贴图、遮挡贴图），使用 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">shader_feature_local</font>`<font style="color:rgb(51, 51, 51);"> 可以显著减少变体数量。对于引擎级功能（如光源、阴影），必须使用 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">multi_compile</font>`<font style="color:rgb(51, 51, 51);"> 以确保变体始终可用。</font>
+移动端每个附加光源约 **0.5-2ms**。建议移动端最多 1-2 个附加光源。
 
-### <font style="color:rgb(51, 51, 51);">3. LOD 级别的设置方法</font>
-<font style="color:rgb(51, 51, 51);">为着色器设置不同的 LOD（Level of Detail）级别，远处的物体使用更简单的着色器变体：</font>
+**实际项目里最有效的两条优化**：
 
-```glsl
-SubShader {
-  LOD 300  // 高质量版本（所有功能）
-    ...
-  }
+1. **把光源烘焙掉**——运行时几乎零开销
+2. **减少实时光源数量**——这是线性节省，比任何 shader 微调都有效
 
-SubShader {
-  LOD 200  // 中等质量版本（简化光照）
-    ...
-  }
+---
 
-SubShader {
-  LOD 100  // 低质量版本（仅主光源）
-    ...
-  }
+### 8.2 shader_feature vs multi_compile
+
+| 指令 | 编译时机 | 适用 |
+|---|---|---|
+| `shader_feature` | 只编译**被材质实际使用**的组合 | 材质级开关（法线、AO、自发光）|
+| `multi_compile` | **全量编译**所有组合 | 引擎级开关（光源、阴影、Lightmap）|
+
+**为什么引擎级必须用 multi_compile**：
+
+```
+shader_feature 的编译时机：打包时（扫描材质，按需编）
+multi_compile 的编译时机：打包时（无条件全编）
+
+引擎级关键字的激活时机：运行时
+    ↓ 由场景内容、渲染器设置决定
+    ↓ 打包时无法预知
+
+如果引擎级用 shader_feature：
+    打包时没有材质"启用"它 → 变体被剥掉
+    运行时引擎激活它 → 找不到变体 → 粉色 / 回退错误
 ```
 
-<font style="color:rgb(51, 51, 51);">在 Unity 中，你可以通过 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">Project Settings > Quality > LOD Bias</font>`<font style="color:rgb(51, 51, 51);"> 控制 LOD 切换的距离。</font>
+**本项目分类对照**：
 
-### <font style="color:rgb(51, 51, 51);">4. 移动端特定的优化建议</font>
-+ **<font style="color:rgb(51, 51, 51);">使用 Per Vertex 光照模式</font>**<font style="color:rgb(51, 51, 51);">：在 URP Asset 中将 Additional Lights 设置为 Per Vertex</font>
-+ **<font style="color:rgb(51, 51, 51);">减少附加光源数量</font>**<font style="color:rgb(51, 51, 51);">：移动端最多 1-2 个附加光源</font>
-+ **<font style="color:rgb(51, 51, 51);">使用烘焙光照</font>**<font style="color:rgb(51, 51, 51);">：尽可能将光源烘焙，减少实时光源</font>
-+ **<font style="color:rgb(51, 51, 51);">禁用软阴影</font>**<font style="color:rgb(51, 51, 51);">：使用硬阴影或禁用阴影</font>
-+ **<font style="color:rgb(51, 51, 51);">降低 Cookie 分辨率</font>**<font style="color:rgb(51, 51, 51);">：使用 256×256 或更小的 Cookie 纹理</font>
-+ **<font style="color:rgb(51, 51, 51);">使用 Half 精度</font>**<font style="color:rgb(51, 51, 51);">：在 Shader 中使用 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">half</font>`<font style="color:rgb(51, 51, 51);"> 类型代替 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">float</font>`<font style="color:rgb(51, 51, 51);"> 进行中间计算</font>
+| 类型 | 本项目示例 |
+|---|---|
+| 材质级（`shader_feature_local*`）| `_NORMALMAP`、`_EMISSION`、`_ALPHA_CUTOUT`、`_SPECULAR_SETUP`、`_OCCLUSIONMAP`、`_CLEARCOATMAP`、`_DOUBLE_SIDED_NORMALS`、`_ROUGHNESS_SETUP`、`_ALPHAPREMULTIPLY_ON` |
+| 引擎级（`multi_compile*`）| `_MAIN_LIGHT_SHADOWS`、`_SHADOWS_SOFT`、`_ADDITIONAL_LIGHTS`、`_MAIN_LIGHT_COOKIE`、`LIGHTMAP_ON`、`_REFLECTION_PROBE_*`、`_SCREEN_SPACE_OCCLUSION`、`_LIGHT_LAYERS`、`_DEBUG_BAKED_GI` |
 
-### <font style="color:rgb(51, 51, 51);">5. 变体数量控制</font>
-<font style="color:rgb(51, 51, 51);">过多的着色器变体会增加编译时间和包体大小。使用 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">shader_feature_local</font>`<font style="color:rgb(51, 51, 51);"> 代替 </font>`<font style="color:rgb(51, 51, 51);background-color:rgb(243, 244, 244);">shader_feature</font>`<font style="color:rgb(51, 51, 51);"> 可以限制变体的传播范围：</font>
+**规律**：材质 Inspector 上能勾的 → `shader_feature`；场景 / 管线设置决定的 → `multi_compile`。
 
-```glsl
-// 只在当前着色器中生成变体
-#pragma shader_feature_local _NORMALMAP
+---
 
-// 全局生成变体（可能影响其他着色器）
-#pragma shader_feature _NORMALMAP
+### 8.3 变体数量计算（重点）
+
+**每个 pragma 产生的变体数 = token 数量**（下划线本身也算一个 token）。
+
+| 写法 | 变体数 | 说明 |
+|---|---|---|
+| `shader_feature _A` | 2 | 开关（无 _A / 有 _A）|
+| `shader_feature _A _B` | 2 | 互斥（_A / _B），无"都不开" |
+| `shader_feature _ _A _B` | 3 | 带默认的互斥（空 / _A / _B）|
+| `multi_compile _A` | 1 | 永远启用 _A，无关闭变体 |
+| `multi_compile _ _A` | 2 | 默认 / _A |
+| `multi_compile _ _A _B _C` | **4** | 默认 + 3 个关键字，**不是 3** |
+
+**多行相乘 = 总变体数**。
+
+**本项目实例（ForwardLit）**：
+
+```
+材质级 7 行 → 2^7 = 128 份
+引擎级多行（阴影 3 × 软阴影 2 × 附加光 2 × ...）→ 数百份
+
+理论最大变体数：几千到上万
 ```
 
+**易错点**：`multi_compile _ _A _B _C` 开头的下划线是**一份变体**（表示"三个关键字都未启用"），不是占位符。
+
+---
+
+### 8.4 变体优化的两个维度（重点）
+
+优化要**同时看两层**，只看一层会漏方案。
+
+#### Shader 层（写代码时）
+
+| 手段 | 效果 |
+|---|---|
+| `shader_feature` 替 `multi_compile` | 仅限材质级关键字可用 |
+| `_local` 后缀 | 限制作用域，不传播到其他 shader |
+| `_fragment` 后缀 | 只影响片元阶段，顶点阶段不生成变体 |
+| 多个独立开关合并为 `[KeywordEnum]` | 例如 3 个二值开关（8 份）合并成 1 个四选一（4 份）|
+
+#### 构建层（打包配置时）
+
+| 手段 | 说明 |
+|---|---|
+| **Variant Stripping** | 剥掉场景里用不到的 `multi_compile` 组合 |
+| **Shader Variant Collection** | 白名单式保留 |
+| **URP Asset 配置** | 关闭不用的功能（如 Additional Lights、Cookie），相关变体自动不生成 |
+
+#### 关键区分（易错）
+
+**Variant Stripping 只对 `multi_compile` 有意义。**
+
+```
+shader_feature  → 本身已"按需编译"，没有多余变体，无需 Strip
+multi_compile   → 无条件全编，有大量场景用不到的变体，才是 Strip 的目标
+```
+
+**反问**："material 级别的能不能 Strip？"——它本来就没多编，无所谓 Strip。
+
+#### 优化目标清单
+
+- [ ] 检查有没有能改成 `shader_feature` 的 `multi_compile`（仅材质级可行）
+- [ ] 检查 `_local` / `_fragment` 是否都用上
+- [ ] 检查多个独立开关能否合并为互斥枚举
+- [ ] 在 Graphics Settings → Shader Stripping 里配置剥离规则
+- [ ] 用 URP Asset 关闭项目不用的功能
+
+---
+
+### 8.5 LOD 分级（了解即可）
+
+教程给出多 SubShader 的 LOD 方案：
+
+```glsl
+SubShader { LOD 300  ... }   // 高质量
+SubShader { LOD 200  ... }   // 中等
+SubShader { LOD 100  ... }   // 低质量
+```
+
+**现实中很少这么用**：
+
++ 维护成本高（三套代码同步改）
++ URP 里 LOD 切换不自动
++ 现代项目更常用 **Variant Stripping** 和 **Quality Settings 分级**（不同画质用不同 URP Asset）
+
+**结论**：知道有 LOD 这个机制即可，不用真的写三套 SubShader。
+
+---
+
+### 8.6 移动端优化建议
+
+| 建议 | 是否值得 | 说明 |
+|---|---|---|
+| 用 Per Vertex 光照 | ⚠️ 视情况 | 移动端省算力，质量降 |
+| 减少附加光源 | ✅ **最有效** | 每个光源一次全屏 Pass |
+| 用烘焙光照 | ✅ **最有效** | 运行时近零开销 |
+| 禁用软阴影 | ✅ 有效 | 软阴影多次采样 |
+| 降低 Cookie 分辨率 | ✅ 有效 | 纹理带宽 |
+| 用 `half` 代替 `float` | ⚠️ **视平台** | 见下 |
+
+**`half` 的真相**：
+
+```
+移动 GPU（Mali / Adreno / PowerVR）：
+    真·half 硬件，吞吐量是 float 的 2 倍 → 有收益 ✅
+
+桌面 GPU（NVIDIA / AMD）：
+    伪 half，硬件实际按 float 算 → 无收益，甚至可能因类型转换有负收益 ⚠️
+```
+
+**本项目跑桌面**，不用专门优化 `half`。
+
+---
+
+### 8.7 `_local` 后缀的意义
+
+```glsl
+#pragma shader_feature_local _NORMALMAP      // 局部：仅当前 shader
+#pragma shader_feature         _NORMALMAP    // 全局：可能影响其他 shader
+```
+
+| | `_local` | 无 `_local` |
+|---|---|---|
+| 作用域 | 仅当前 shader | 全局 |
+| 变体传播 | 不传播 | 可能传播 |
+| 编译开销 | 小 | 大 |
+| 运行时冲突 | 无 | 可能 |
+
+**`_local_fragment` 的额外好处**：只影响片元阶段，顶点阶段不生成变体，进一步省编译。
+
+**什么时候不能用 `_fragment`**：当这个效果**顶点阶段也需要**时。
+
+例：`_ALPHA_CUTOUT` 用了 `shader_feature_local`（没有 `_fragment`），因为 `ShadowCasterPass` 的顶点阶段要用 UV 传下来做镂空裁切。
+
+---
+
+### 8.8 变体优化实战：Variant Stripping
+
+**路径**：`Project Settings > Graphics > Shader Stripping`
+
+常用设置：
+
++ **Lightmap Modes**：设为 Custom，只勾项目实际用的模式（如仅 Baked Directional）
++ **Fog Modes**：项目不用雾就剥掉
++ **Instancing Variants**：不用 GPU Instancing 就剥掉
+
+**URP 专用**：
+
++ URP Asset 里关闭不用的功能（Additional Lights、Main Light Cookie、Soft Shadows），对应变体自动不生成
++ 关闭 SSAO / 反射探针混合等 Renderer Feature
+
+---
+
+### 8.9 变体优化速查（易错点）
+
+| 概念 | 正确理解 |
+|---|---|
+| 变体数量 | 多行 pragma **相乘**；下划线是 token |
+| `shader_feature` 会传播 | 加 `_local` 限制作用域 |
+| `multi_compile` 能改 `shader_feature` | **引擎级不能改**，会导致变体剥离 → 运行时错误 |
+| Stripping 能剥 `shader_feature` | **不能**，它本身已按需编译，无需剥 |
+| Stripping 能剥 `multi_compile` | **能**，这才是 Strip 的目标 |
+| `half` 在桌面更快 | **不会**，桌面是伪 half |
+
+---
 ---
 
 ## <font style="color:rgb(51, 51, 51);">九、Part 5 完整修改清单</font>

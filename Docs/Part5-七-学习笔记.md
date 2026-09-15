@@ -302,6 +302,21 @@ real sign = input.tangentOS.w * GetOddNegativeScale();
 | "凹凸像凹的" 原因 | 答"副切线手性" | **全模型反 = green channel（GL/DX）**；**半边反 = 手性** |
 | TBN 非法，原因 | 答"副切线算错" | 输入数据问题（切线生成失败 / UV 退化）|
 
+### G 组：变体计算与优化（Part5 第八节）
+
+| 题 | 错因 | 纠正 |
+|---|---|---|
+| `multi_compile _ _A _B _C` 几份 | 答 3 | **4 份**。开头的 `_` 是默认变体，也是 token |
+| `multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE` | 答 2 | **3 份**（默认 + 两个关键字）|
+| Variant Stripping 能剥哪些 | 答"material 级" | **只对 `multi_compile` 有意义**，`shader_feature` 本身已按需编译 |
+| 优化维度 | 只想到"改 pragma" | **两层都要看**：Shader 层（pragma 写法）+ 构建层（Variant Stripping）|
+| 抽象 vs 具体动作 | 答"让 URP 剥离变体" | 这是"目标状态"不是"动作"。应写"移除那行 Cookie pragma" |
+
+**核心结论**：
+
+> **`shader_feature` = 只编用到的（已省）；`multi_compile` = 全编（需要 Strip）**
+> **Variant Stripping 是给 `multi_compile` 用的，不是给 `shader_feature` 用的。**
+
 ---
 
 ## 五、易错点自查清单
@@ -330,6 +345,13 @@ real sign = input.tangentOS.w * GetOddNegativeScale();
 - [ ] 用的是**非抖动**位置算运动向量吗？
 - [ ] `ApplyMotionVectorZBias` 在 `positionCS` 赋值**之后**调用了吗？
 
+### 变体类
+
+- [ ] 数 token 时，**下划线算进去了**吗？
+- [ ] 这行是**材质级**还是**引擎级**？材质级才能改 `shader_feature`
+- [ ] 优化时，**Shader 层 + 构建层**都看了吗？
+- [ ] 写的是"具体动作"还是"目标状态"？
+
 ---
 
 ## 六、遗留薄弱点
@@ -338,6 +360,8 @@ real sign = input.tangentOS.w * GetOddNegativeScale();
 |---|---|---|
 | 空间概念（相机 vs 物体）| "世界空间 TBN 与相机无关"反复错 | 写代码时多看 "WS" 后缀，5 次成肌肉记忆 |
 | 叉乘计算 | 符号易错 | 每次算完验算，别跳步 |
+| 变体 token 计数 | 漏数默认项 `_` | 数 token 时先标记"下划线也算一个" |
+| 优化维度单一 | 只想到改 pragma | 强制自己列"Shader 层 / 构建层"两栏 |
 | 答题偏题 | 引入无关变量 | 答题前划边界，写完反问"这回答了题目吗" |
 
 ---
@@ -352,8 +376,9 @@ real sign = input.tangentOS.w * GetOddNegativeScale();
 | TBN / 法线贴图 | 所有 PBR 材质 |
 | sRGB / Linear | 所有贴图导入 |
 | 手性 | 角色、双面材质、镜像模型 |
+| 变体计算 / Stripping | 打包优化、编译时间控制 |
 
 ---
 
 > 笔记完。
-> 下一步：Part5 第八节（性能考虑）。
+> Part5 第八节（性能考虑）已完成，知识见 `Part5.md` 8.3-8.9，错题见本文件 G 组。
