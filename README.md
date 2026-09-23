@@ -4,6 +4,16 @@
 
 ---
 
+## 🎬 效果展示
+
+> 金属度工作流（`_Metalness` 0 → 1 循环扫描 + 相机环绕）
+
+![Metalness Workflow](Docs/images/mylit-metalness.gif)
+
+*镜头环绕 + 金属度参数实时扫描，展示金属度/非金属度过渡下的 PBR 光照、反射探针与阴影表现。*
+
+---
+
 ## ✨ 特性
 
 - **PBR 物理光照模型**：基于 URP 内置 `UniversalFragmentPBR`，支持主光源阴影、软阴影、级联阴影
